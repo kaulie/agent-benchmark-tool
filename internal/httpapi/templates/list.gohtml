@@ -52,6 +52,19 @@
   .pane a.more { padding:6px 10px; font-size:11px; border-top:1px dashed var(--line); color:var(--accent); text-decoration:none; }
   .empty { padding:24px; text-align:center; color:var(--muted); }
 
+  /* output view toggle: raw_output <-> normalized_output (never both at once) */
+  .viewbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 12px; font-size:12px; color:var(--muted); }
+  .viewbar .k { text-transform:uppercase; letter-spacing:.04em; font-size:11px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#fff; }
+  .seg a { padding:3px 10px; font-size:11px; text-decoration:none; color:#334155; }
+  .seg a + a { border-left:1px solid var(--line); }
+  .seg a.on { background:var(--accent); color:#fff; }
+  .pane-out .variant { font-weight:600; color:#166534; }
+  .none { padding:10px; color:var(--muted); font-size:12px; }
+  /* only the selected output variant is visible */
+  [data-out="raw"] [data-out="normalized"],
+  [data-out="normalized"] [data-out="raw"] { display:none; }
+
   /* narrow screens: stack input above output */
   @media (max-width:900px) {
     .pair { grid-template-columns:1fr; }
@@ -63,8 +76,18 @@
 <h1>reason_turns</h1>
 <div class="sub">db: {{.DBPath}} · {{.Total}} matching turns · page {{.PageNumber}} (showing {{.Shown}})</div>
 
+<div class="viewbar">
+  <span class="k">output 视图</span>
+  <span class="seg">
+    <a href="{{.RawViewURL}}" data-out-link="raw" class="{{if eq .OutView "raw"}}on{{end}}">raw_output</a>
+    <a href="{{.NormViewURL}}" data-out-link="normalized" class="{{if eq .OutView "normalized"}}on{{end}}">normalized_output</a>
+  </span>
+  <span>本页 {{.NormalizedCount}}/{{.Shown}} 条有 normalized_output</span>
+</div>
+
 
 <form class="filters" method="get" action="/">
+  <input type="hidden" name="out" value="{{.OutView}}">
   <div class="field">
     <label for="task_id">task_id</label>
     <select id="task_id" name="task_id">
@@ -135,6 +158,7 @@
   {{if .HasNext}}<a href="{{.NextURL}}">next ›</a> <a href="{{.LastURL}}">last »</a>{{end}}
 </div>
 
+<div class="turns" data-out-view-root data-out="{{.OutView}}">
 {{range .Rows}}
 <article class="turn" data-turn="{{.ID}}">
   <header class="turn-head">
@@ -155,8 +179,17 @@
       <a class="more" href="{{.DetailURL}}">view full input ›</a>
     </section>
     <section class="pane pane-out">
-      <div class="pane-head"><span>output</span><span class="len">raw_output · {{.OutputLen}} chars</span></div>
-      <pre>{{.OutputPreview}}</pre>
+      <div class="pane-head">
+        <span>output</span>
+        <span class="variant" data-out="raw">raw_output</span>
+        <span class="variant" data-out="normalized">normalized_output</span>
+        <span class="len" data-out="raw">{{.OutputLen}} chars</span>
+        <span class="len" data-out="normalized">{{.NormalizedLen}} chars</span>
+      </div>
+      <div class="ov" data-out="raw"><pre>{{.OutputPreview}}</pre></div>
+      <div class="ov" data-out="normalized">
+        {{if .HasNormalized}}<pre>{{.NormalizedPreview}}</pre>{{else}}<div class="none">该 turn 没有 normalized_output</div>{{end}}
+      </div>
       <a class="more" href="{{.DetailURL}}">view full output ›</a>
     </section>
   </div>
@@ -164,12 +197,40 @@
 {{else}}
 <div class="empty">no turns match these filters</div>
 {{end}}
+</div>
 
 <div class="pager">
   <span>page {{.PageNumber}}</span>
   {{if .HasPrev}}<a href="{{.FirstURL}}">« first</a> <a href="{{.PrevURL}}">‹ prev</a>{{end}}
   {{if .HasNext}}<a href="{{.NextURL}}">next ›</a> <a href="{{.LastURL}}">last »</a>{{end}}
 </div>
+<script>
+// Progressive enhancement: the raw_output / normalized_output toggle switches
+// panes instantly. The toggle is made of plain links, so with JavaScript off it
+// still works — just with a page load (?out=normalized).
+(function () {
+  var root = document.querySelector('[data-out-view-root]');
+  if (!root) return;
+  function apply(view) {
+    root.setAttribute('data-out', view);
+    document.querySelectorAll('a[data-out-link]').forEach(function (a) {
+      a.classList.toggle('on', a.getAttribute('data-out-link') === view);
+    });
+    var u = new URL(location.href);
+    if (view === 'normalized') u.searchParams.set('out', 'normalized');
+    else u.searchParams.delete('out');
+    history.replaceState(null, '', u);
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var a = t.closest('a[data-out-link]');
+    if (!a) return;
+    ev.preventDefault();
+    apply(a.getAttribute('data-out-link'));
+  });
+})();
+</script>
 </body>
 </html>
 {{end}}

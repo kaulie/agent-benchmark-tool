@@ -28,6 +28,10 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 - 列表页：<http://127.0.0.1:4231/> —— 每个 turn 一张卡片：顶部一行元信息
   （`#id` `task_id` `agent` `mode` `model` `status` `step` `created_at`），下面 **input 左 / output 右** 两栏成对比读，
   窄屏（≤900px）自动改为上下堆叠
+- **output 视图开关**：右上角可切换 `raw_output` ⇄ `normalized_output`（同一时刻只显示一个，不再同时铺开），
+  切换是纯前端即时生效（URL 同步为 `?out=normalized`，可分享/刷新保持）；关闭 JS 时退化为普通链接跳转。
+  列表页还会显示「本页 N/M 条有 normalized_output」；某条没有归一化输出时该栏提示而不是空白
+- 单条详情（含完整 input / output）：`/turns/{id}`（同样带 output 视图开关）
 - 单条详情（含完整 input / raw_output / normalized_output）：`/turns/{id}`
 - JSON 列表：`/api/reason-turns`
 - JSON 单条：`/api/reason-turns/{id}`
@@ -55,6 +59,7 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 | `order` | `id`（默认）/ `created_at` / `duration_ms` / `total_tokens` |
 | `dir` | `desc`（默认）/ `asc` |
 | `preview` `truncate` | `preview=1` 时把 input/output 截断为 `truncate` 个字符（默认 400），便于列表消费 |
+| `out` | **仅影响 HTML 页面**：`out=normalized` 让 output 栏显示 `normalized_output`（默认 `raw`）。JSON 接口始终同时返回两个字段 |
 
 返回：
 

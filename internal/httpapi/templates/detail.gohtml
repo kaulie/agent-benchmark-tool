@@ -28,15 +28,34 @@
   .side.in h2 { color:#1d4ed8; }
   .side.out h2 { color:#166534; }
   @media (max-width:900px) { .pair { grid-template-columns:1fr; } }
-  details pre.box { margin-top:8px; }
+
+  /* output view toggle: raw_output <-> normalized_output (never both at once) */
+  .viewbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 10px; font-size:12px; color:var(--muted); }
+  .viewbar .k { text-transform:uppercase; letter-spacing:.04em; font-size:11px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#fff; }
+  .seg a { padding:3px 10px; font-size:11px; text-decoration:none; color:#334155; }
+  .seg a + a { border-left:1px solid var(--line); }
+  .seg a.on { background:var(--accent); color:#fff; }
+  .side.out .variant { color:#166534; }
+  [data-out="raw"] [data-out="normalized"],
+  [data-out="normalized"] [data-out="raw"] { display:none; }
   .hint { color:var(--muted); font-size:11px; margin:4px 0 0; }
   .tag { display:inline-block; padding:1px 6px; border-radius:10px; background:#eef2f7; font-size:11px; color:#334155; }
 </style>
 </head>
-<body>
+<body data-out-view-root data-out="{{.OutView}}">
 <p><a href="/">« back to list</a> · <a href="/api/reason-turns/{{.Turn.ID}}">json</a></p>
 <h1>reason_turn #{{.Turn.ID}}</h1>
 <div class="sub">db: {{.DBPath}}</div>
+
+<div class="viewbar">
+  <span class="k">output 视图</span>
+  <span class="seg">
+    <a href="{{.RawViewURL}}" data-out-link="raw" class="{{if eq .OutView "raw"}}on{{end}}">raw_output</a>
+    <a href="{{.NormViewURL}}" data-out-link="normalized" class="{{if eq .OutView "normalized"}}on{{end}}">normalized_output</a>
+  </span>
+  {{if not .Turn.NormalizedOutput}}<span>该 turn 没有 normalized_output</span>{{end}}
+</div>
 
 <dl class="meta">
   <div><dt>task_id</dt><dd>{{.Turn.TaskID}}</dd></div>
@@ -69,15 +88,41 @@
     <pre class="box">{{.Turn.Input}}</pre>
   </section>
   <section class="side out">
-    <h2>output · raw_output <span class="hint">({{.OutputLen}} chars)</span></h2>
-    <pre class="box">{{.Turn.Output}}</pre>
+    <h2>output · <span class="variant" data-out="raw">raw_output</span><span class="variant" data-out="normalized">normalized_output</span>
+      <span class="hint" data-out="raw">{{.OutputLen}} chars</span>
+      <span class="hint" data-out="normalized">{{.NormalizedLen}} chars</span>
+    </h2>
+    <pre class="box" data-out="raw">{{.Turn.Output}}</pre>
+    <pre class="box" data-out="normalized">{{if .Turn.NormalizedOutput}}{{.Turn.NormalizedOutput}}{{else}}该 turn 没有 normalized_output（模型返回未归一化）{{end}}</pre>
   </section>
 </div>
 
-{{if .Turn.NormalizedOutput}}
-<h2>normalized_output</h2>
-<details open><summary class="hint">{{.NormalizedLen}} chars</summary><pre class="box">{{.Turn.NormalizedOutput}}</pre></details>
-{{end}}
+<script>
+// Progressive enhancement: the raw_output / normalized_output toggle switches
+// panes instantly; without JavaScript the plain links reload with ?out=.
+(function () {
+  var root = document.querySelector('[data-out-view-root]');
+  if (!root) return;
+  function apply(view) {
+    root.setAttribute('data-out', view);
+    document.querySelectorAll('a[data-out-link]').forEach(function (a) {
+      a.classList.toggle('on', a.getAttribute('data-out-link') === view);
+    });
+    var u = new URL(location.href);
+    if (view === 'normalized') u.searchParams.set('out', 'normalized');
+    else u.searchParams.delete('out');
+    history.replaceState(null, '', u);
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var a = t.closest('a[data-out-link]');
+    if (!a) return;
+    ev.preventDefault();
+    apply(a.getAttribute('data-out-link'));
+  });
+})();
+</script>
 </body>
 </html>
 {{end}}
