@@ -70,7 +70,7 @@ func New(st TurnReader) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: parse templates: %w", err)
 	}
-	return &Server{store: st, tmpl: tmpl, previewRunes: 320}, nil
+	return &Server{store: st, tmpl: tmpl, previewRunes: 480}, nil
 }
 
 // Handler wires the routes.

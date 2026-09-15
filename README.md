@@ -25,7 +25,9 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 
 启动后：
 
-- 列表页：<http://127.0.0.1:4231/>
+- 列表页：<http://127.0.0.1:4231/> —— 每个 turn 一张卡片：顶部一行元信息
+  （`#id` `task_id` `agent` `mode` `model` `status` `step` `created_at`），下面 **input 左 / output 右** 两栏成对比读，
+  窄屏（≤900px）自动改为上下堆叠
 - 单条详情（含完整 input / raw_output / normalized_output）：`/turns/{id}`
 - JSON 列表：`/api/reason-turns`
 - JSON 单条：`/api/reason-turns/{id}`

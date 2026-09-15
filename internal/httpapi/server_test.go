@@ -261,8 +261,9 @@ func TestListPageHTML(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"<th>id</th>", "<th>task_id</th>", "<th>agent</th>", "<th>mode</th>", "<th>model</th>",
-		"<th>input</th>", "<th>output</th>",
+		`class="turn" data-turn="1"`, `class="turn" data-turn="3"`,
+		"pane pane-in", "pane pane-out",
+		"<span>input</span>", "<span>output</span>",
 		"task-1", "task-2", "agent-0001", "composer-2.5", "deepseek-v4-pro",
 		`href="/turns/3"`,
 	} {
@@ -270,6 +271,28 @@ func TestListPageHTML(t *testing.T) {
 			t.Fatalf("list page is missing %q", want)
 		}
 	}
+
+	// input is the left pane and output the right one, inside the same turn card.
+	for _, id := range []string{"1", "2", "3"} {
+		card := body
+		if i := strings.Index(body, `data-turn="`+id+`"`); i >= 0 {
+			card = body[i:]
+			if end := strings.Index(card, "</article>"); end >= 0 {
+				card = card[:end]
+			}
+		} else {
+			t.Fatalf("turn %s card missing", id)
+		}
+		in := strings.Index(card, "pane pane-in")
+		out := strings.Index(card, "pane pane-out")
+		if in < 0 || out < 0 || in > out {
+			t.Fatalf("turn %s: expected input pane left of output pane (in=%d out=%d)", id, in, out)
+		}
+		if !strings.Contains(card, `class="pair"`) {
+			t.Fatalf("turn %s: expected a left/right pair wrapper", id)
+		}
+	}
+
 	// The prompt is escaped, never injected as markup.
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatal("prompt was not HTML-escaped")
@@ -301,6 +324,14 @@ func TestDetailPageHTML(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("detail page is missing %q", want)
 		}
+	}
+	// input (left) and output (right) are paired side by side.
+	if !strings.Contains(body, `class="pair"`) || !strings.Contains(body, `class="side in"`) ||
+		!strings.Contains(body, `class="side out"`) {
+		t.Fatal("detail page is missing the input/output pair layout")
+	}
+	if in, out := strings.Index(body, `class="side in"`), strings.Index(body, `class="side out"`); in < 0 || out < 0 || in > out {
+		t.Fatalf("detail page: expected input left of output (in=%d out=%d)", in, out)
 	}
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatal("detail page did not escape the prompt")
