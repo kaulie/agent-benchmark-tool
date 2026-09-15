@@ -109,6 +109,61 @@ go vet ./...
 | HTTP 路由、JSON 接口、HTML 页面 | `internal/httpapi/server.go`、`internal/httpapi/pages.go` |
 | 页面模板 | `internal/httpapi/templates/*.gohtml` |
 
+## 部署（agent-control-plane-deployment 规范）
+
+本服务已接入平台的部署系统（控制面：<http://127.0.0.1:4220/panel/>，部署域，与 runtime 分离）。
+
+### 打包
+
+仓库根目录的 `build.sh` 遵循平台规范：产出 `outputs/`（`bin/benchmarkd` + `scripts/*.sh`），
+前端页面用 `go:embed` 编进二进制。
+
+```bash
+make package        # 等价：APP_VERSION=<hash> ./build.sh
+make runtime-check  # 在临时 runtime 目录跑一遍 start → /health → stop（不动线上 4231）
+```
+
+### runtime 布局
+
+| 路径 | 来源 | 说明 |
+|------|------|------|
+| `bin/benchmarkd` | 发版包 | 可执行文件 |
+| `scripts/{start,stop,restart}.sh` | 发版包 | 平台按服务契约调用 |
+| `backend/.env` | 首次启动生成（600） | 唯一可覆盖项：`AUTONOMY_DB`（被评测数据源） |
+| `backend/runtime.pid`、`backend/server.log` | 运行期 | 部署时被平台保留 |
+
+启动时平台注入 `PORT`（来自服务契约 healthUrl）、`RUNTIME_DIR`、`APP_VERSION`；
+服务固定监听 `127.0.0.1:${PORT}`，平台统一探活 `GET /health`。
+
+### 触发部署
+
+平台把「打包 + 上线」做成一条流水线（服务契约 + ref）：
+
+```bash
+# 触发（异步；等价于面板上的「触发打包+部署」按钮）
+curl -s -X POST http://127.0.0.1:4220/api/deploy-notify \
+  -H 'Content-Type: application/json' \
+  -d '{"serviceId":"agent-benchmark-tool","ref":"main"}'
+
+# 查询
+curl -s 'http://127.0.0.1:4220/api/pipelines?limit=5'
+curl -s 'http://127.0.0.1:4220/api/pipelines/<requestId>'
+```
+
+服务契约（`PUT /api/services/agent-benchmark-tool`）：
+
+| 字段 | 值 |
+|------|-----|
+| serviceId | `agent-benchmark-tool` |
+| runtimeDir | `/Users/gaolei/runtime/agent-benchmark-tool` |
+| healthUrl | `http://127.0.0.1:4231/health` |
+| startCmd / stopCmd / restartCmd | `bash "<runtimeDir>/scripts/{start,stop,restart}.sh"` |
+| gitRepoUrl | `https://github.com/kaulie/agent-benchmark-tool` |
+| defaultBranch | `main` |
+
+> 注意：流水线在**服务端异步执行**（独立部署代理），不要在本 agent 的 shell 里同步跑
+> `bin/deploy.sh`——那会在 shell 存活期间把服务重启掉。
+
 ## 后续阶段（规划中）
 
 2. **行为标记**：对本工具的 turn 建立标注（标签、评分、问题归类）与提示词修订记录，

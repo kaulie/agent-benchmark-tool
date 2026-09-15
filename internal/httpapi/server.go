@@ -81,6 +81,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/reason-turns", s.handleListJSON)
 	mux.HandleFunc("GET /api/reason-turns/{id}", s.handleDetailJSON)
 	mux.HandleFunc("GET /api/facets", s.handleFacetsJSON)
+	// /health is the path the deployment platform probes for every service;
+	// /healthz is kept as an alias for manual use.
+	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	return logRequests(mux)
 }
