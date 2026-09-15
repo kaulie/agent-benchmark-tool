@@ -47,10 +47,19 @@ func defaultAddr() string {
 	return "127.0.0.1:4231"
 }
 
+// version is stamped at build time via -ldflags "-X main.version=<hash>".
+var version = "dev"
+
 func main() {
 	dbPath := flag.String("db", defaultDBPath(), "path to the autonomy SQLite database (read-only)")
 	addr := flag.String("addr", defaultAddr(), "listen address, e.g. 127.0.0.1:4231")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("benchmarkd ")
@@ -89,9 +98,10 @@ func run(dbPath, addr string) error {
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
+	log.Printf("benchmarkd %s", version)
 	log.Printf("db (read-only): %s", db.Path())
 	log.Printf("reason_turns: %d rows", total)
-	log.Printf("listening on http://%s/  (json: /api/reason-turns, health: /healthz)", ln.Addr())
+	log.Printf("listening on http://%s/  (json: /api/reason-turns, health: /health)", ln.Addr())
 
 	errc := make(chan error, 1)
 	go func() {
