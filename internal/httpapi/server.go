@@ -33,15 +33,13 @@ type TurnReader interface {
 
 // Server renders reason_turns as JSON and HTML.
 type Server struct {
-	store        TurnReader
-	tmpl         *template.Template
-	previewRunes int
+	store TurnReader
+	tmpl  *template.Template
 }
 
 // New builds a Server, parsing the embedded templates.
 func New(st TurnReader) (*Server, error) {
 	funcs := template.FuncMap{
-		"preview":  store.Preview,
 		"minus":    func(a, b int) int { return a - b },
 		"plus":     func(a, b int) int { return a + b },
 		"withPrev": func(offset int) bool { return offset > 0 },
@@ -70,7 +68,7 @@ func New(st TurnReader) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: parse templates: %w", err)
 	}
-	return &Server{store: st, tmpl: tmpl, previewRunes: 480}, nil
+	return &Server{store: st, tmpl: tmpl}, nil
 }
 
 // Handler wires the routes.
@@ -93,9 +91,6 @@ type listRequest struct {
 	opts     store.ListOptions
 	preview  bool
 	truncate int
-	// out selects the output view shown in the HTML output pane: "raw" (default)
-	// or "normalized". It never changes the JSON API, which returns both.
-	out string
 }
 
 // Output views for the HTML output pane.
@@ -136,7 +131,6 @@ func parseListRequest(q url.Values) listRequest {
 		},
 		preview:  q.Get("preview") == "1" || strings.EqualFold(q.Get("preview"), "true"),
 		truncate: parseInt(q, "truncate", 400),
-		out:      parseOutView(q),
 	}
 	// dir=asc|desc, default desc (newest first).
 	req.opts.Desc = !strings.EqualFold(strings.TrimSpace(q.Get("dir")), "asc")

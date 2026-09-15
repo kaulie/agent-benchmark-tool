@@ -252,7 +252,9 @@ func TestFacetsAndHealthJSON(t *testing.T) {
 	}
 }
 
-func TestListPageHTML(t *testing.T) {
+// TestListPageHTML pins the list page contract: metadata only. The prompt and
+// the output texts are read on the detail page, so the list must not ship them.
+func TestListPageHTMLShowsMetadataOnly(t *testing.T) {
 	srv := newTestServer(t)
 
 	rec := get(t, srv, "/")
@@ -262,88 +264,64 @@ func TestListPageHTML(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{
 		`class="turn" data-turn="1"`, `class="turn" data-turn="3"`,
-		"pane pane-in", "pane pane-out",
-		"<span>input</span>", "<span>output</span>",
+		`data-href="/turns/3"`, `href="/turns/3"`,
+		"input chars", "output chars", "normalized_output",
 		"task-1", "task-2", "agent-0001", "composer-2.5", "deepseek-v4-pro",
-		`href="/turns/3"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("list page is missing %q", want)
 		}
 	}
 
-	// input is the left pane and output the right one, inside the same turn card.
-	for _, id := range []string{"1", "2", "3"} {
-		card := body
-		if i := strings.Index(body, `data-turn="`+id+`"`); i >= 0 {
-			card = body[i:]
-			if end := strings.Index(card, "</article>"); end >= 0 {
-				card = card[:end]
-			}
-		} else {
-			t.Fatalf("turn %s card missing", id)
-		}
-		in := strings.Index(card, "pane pane-in")
-		out := strings.Index(card, "pane pane-out")
-		if in < 0 || out < 0 || in > out {
-			t.Fatalf("turn %s: expected input pane left of output pane (in=%d out=%d)", id, in, out)
-		}
-		if !strings.Contains(card, `class="pair"`) {
-			t.Fatalf("turn %s: expected a left/right pair wrapper", id)
+	// No turn text at all: not the prompts, not the outputs (raw or normalized).
+	for _, leaked := range []string{
+		"AGENT PROMPT ONE", "PLAN PROMPT TWO", // inputs
+		"did the thing", "raw plan output", "plan two", // outputs / raw outputs
+		"&lt;script&gt;alert(1)&lt;/script&gt;", "<script>alert(1)</script>", // the HTML-ish prompt
+		"pane pane-in", "pane pane-out", "class=\"pair\"", "<pre", // no preview panes
+	} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("list page must not render turn text, found %q", leaked)
 		}
 	}
 
-	// The prompt is escaped, never injected as markup.
-	if strings.Contains(body, "<script>alert(1)</script>") {
-		t.Fatal("prompt was not HTML-escaped")
-	}
-	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
-		t.Fatal("expected escaped prompt preview in the page")
+	// The output view toggle is a detail-page control; the list has no content
+	// to switch, so it must not carry one.
+	if strings.Contains(body, "data-out") {
+		t.Fatal("list page should not carry the output view toggle")
 	}
 
-	// Output view toggle: defaults to raw_output, and both variants are in the
-	// DOM so the switch needs no round trip (only one is visible via CSS).
-	if !strings.Contains(body, `data-out-view-root data-out="raw"`) {
-		t.Fatalf("expected the output view root to default to raw, got:\n%s", firstLines(body, 40))
+	// Character counts replace the texts, so the list still says which turn is
+	// worth opening (turn 1: 37 input chars / 15 output chars).
+	rowOf := func(id string) string {
+		i := strings.Index(body, `data-turn="`+id+`"`)
+		if i < 0 {
+			t.Fatalf("turn %s row missing", id)
+		}
+		row := body[i:]
+		if end := strings.Index(row, "</tr>"); end >= 0 {
+			row = row[:end]
+		}
+		return row
 	}
-	if !strings.Contains(body, `data-out-link="raw"`) || !strings.Contains(body, `data-out-link="normalized"`) {
-		t.Fatal("expected both output view toggle links")
+	if row := rowOf("1"); !strings.Contains(row, ">37<") || !strings.Contains(row, ">15<") {
+		t.Fatalf("turn 1 row should show 37 input chars and 15 output chars:\n%s", row)
 	}
-	if strings.Count(body, `data-out="raw"`) < 2 || strings.Count(body, `data-out="normalized"`) < 2 {
-		t.Fatal("expected raw and normalized panes to both be rendered")
+	if !strings.Contains(rowOf("1"), `class="tag norm"`) {
+		t.Fatal("turn 1 has a normalized_output, expected the marker in its row")
 	}
-
-	// ?out=normalized selects the other variant and keeps the toggle in sync.
-	rec = get(t, srv, "/?out=normalized")
-	nbody := rec.Body.String()
-	if !strings.Contains(nbody, `data-out-view-root data-out="normalized"`) {
-		t.Fatal("?out=normalized should select the normalized view")
-	}
-	if !strings.Contains(nbody, `href="?out=normalized" data-out-link="normalized" class="on"`) &&
-		!strings.Contains(nbody, `data-out-link="normalized" class="on"`) {
-		t.Fatal("?out=normalized should mark the normalized toggle as active")
-	}
-	if !strings.Contains(nbody, `class="on"`) {
-		t.Fatal("expected an active segment in the toggle")
-	}
-	// The view survives pagination and filter links.
-	if !strings.Contains(nbody, "out=normalized") {
-		t.Fatal("expected pager/form links to keep the selected view")
+	if !strings.Contains(rowOf("2"), `class="dash"`) {
+		t.Fatal("turn 2 has no normalized_output, expected a dash in its row")
 	}
 
-	// A turn without normalized output says so instead of showing an empty pane.
-	if n := strings.Count(nbody, "该 turn 没有 normalized_output"); n != 1 {
-		t.Fatalf("expected exactly one turn to report a missing normalized_output, got %d", n)
-	}
-	if !strings.Contains(nbody, "本页 2/3 条有 normalized_output") {
-		t.Fatal("expected the view bar to report how many turns have a normalized output")
-	}
-
-	// Filters are honoured and reflected in the page, and keep the view.
+	// Filters are honoured and reflected in the page, without any turn text.
 	rec = get(t, srv, "/?mode=agent&limit=25")
-	if fbody := rec.Body.String(); !strings.Contains(fbody, "AGENT PROMPT ONE") ||
-		strings.Contains(fbody, "PLAN PROMPT TWO") {
-		t.Fatalf("filtered page unexpected:\n%s", fbody)
+	fbody := rec.Body.String()
+	if !strings.Contains(fbody, `data-turn="2"`) || strings.Contains(fbody, `data-turn="3"`) {
+		t.Fatalf("filtered page unexpected:\n%s", firstLines(fbody, 60))
+	}
+	if strings.Contains(fbody, "AGENT PROMPT ONE") {
+		t.Fatal("filtered list page must not render the prompt either")
 	}
 }
 

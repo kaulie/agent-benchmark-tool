@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>reason_turns · agent benchmark</title>
 <style>
-  :root { --line:#e2e5ea; --muted:#6b7280; --head:#f6f7f9; --accent:#1f6feb; --in:#eef6ff; --out:#f3f7f1; }
+  :root { --line:#e2e5ea; --muted:#6b7280; --head:#f6f7f9; --accent:#1f6feb; }
   * { box-sizing: border-box; }
   body { margin:0; padding:20px 24px 60px; font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
          color:#111; background:#fff; }
@@ -23,71 +23,34 @@
   .pager { display:flex; gap:12px; align-items:center; margin:14px 0; color:var(--muted); font-size:12px; }
   .pager a { color:var(--accent); text-decoration:none; }
 
-  /* one turn = meta line + input(left) / output(right) pair */
-  .turn { border:1px solid var(--line); border-radius:10px; margin-bottom:14px; overflow:hidden; }
-  .turn-head { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; padding:8px 10px;
-               background:var(--head); border-bottom:1px solid var(--line); font-size:12px; }
+  /* list = metadata only: the input/output texts live on the detail page */
+  .hint-row { color:var(--muted); font-size:12px; margin:0 0 8px; }
+  table.turns { width:100%; border-collapse:collapse; font-size:12px; }
+  table.turns th, table.turns td { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left;
+                                   vertical-align:top; white-space:nowrap; }
+  table.turns thead th { position:sticky; top:0; background:var(--head); color:var(--muted);
+                         font-size:11px; text-transform:uppercase; letter-spacing:.04em; font-weight:600; }
+  table.turns td.num, table.turns th.num { text-align:right; }
+  tr.turn[data-href] { cursor:pointer; }
+  tr.turn:hover { background:#f8fafc; }
   .turn-id { font-weight:700; color:var(--accent); text-decoration:none;
              font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-  .turn-head .pair-hint { margin-left:auto; color:var(--muted); font-size:11px; }
-  .chip { display:inline-flex; gap:4px; align-items:baseline; }
-  .chip .k { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
-  .chip .v { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
   .tag { display:inline-block; padding:1px 7px; border-radius:10px; background:#e6ebf5; font-size:11px; color:#334155; }
   .tag.error { background:#fee2e2; color:#991b1b; }
   .tag.plan { background:#ede9fe; color:#5b21b6; }
   .tag.agent { background:#dcfce7; color:#166534; }
-
-  .pair { display:grid; grid-template-columns:1fr 1fr; gap:0; }
-  .pane { min-width:0; display:flex; flex-direction:column; }
-  .pane + .pane { border-left:1px solid var(--line); }
-  .pane-head { display:flex; align-items:center; gap:6px; padding:5px 10px; font-size:11px;
-               text-transform:uppercase; letter-spacing:.04em; color:var(--muted); border-bottom:1px solid var(--line); }
-  .pane-head .len { margin-left:auto; text-transform:none; letter-spacing:0; }
-  .pane-in .pane-head { background:var(--in); }
-  .pane-out .pane-head { background:var(--out); }
-  .pane pre { margin:0; padding:10px; white-space:pre-wrap; word-break:break-word;
-              font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
-              max-height:190px; overflow:hidden; }
-  .pane a.more { padding:6px 10px; font-size:11px; border-top:1px dashed var(--line); color:var(--accent); text-decoration:none; }
+  .tag.norm { background:#e0f2fe; color:#075985; }
+  .dash { color:var(--muted); }
+  td.open a { color:var(--accent); text-decoration:none; }
   .empty { padding:24px; text-align:center; color:var(--muted); }
-
-  /* output view toggle: raw_output <-> normalized_output (never both at once) */
-  .viewbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:0 0 12px; font-size:12px; color:var(--muted); }
-  .viewbar .k { text-transform:uppercase; letter-spacing:.04em; font-size:11px; }
-  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#fff; }
-  .seg a { padding:3px 10px; font-size:11px; text-decoration:none; color:#334155; }
-  .seg a + a { border-left:1px solid var(--line); }
-  .seg a.on { background:var(--accent); color:#fff; }
-  .pane-out .variant { font-weight:600; color:#166534; }
-  .none { padding:10px; color:var(--muted); font-size:12px; }
-  /* only the selected output variant is visible */
-  [data-out="raw"] [data-out="normalized"],
-  [data-out="normalized"] [data-out="raw"] { display:none; }
-
-  /* narrow screens: stack input above output */
-  @media (max-width:900px) {
-    .pair { grid-template-columns:1fr; }
-    .pane + .pane { border-left:0; border-top:1px solid var(--line); }
-  }
 </style>
 </head>
 <body>
 <h1>reason_turns</h1>
 <div class="sub">db: {{.DBPath}} · {{.Total}} matching turns · page {{.PageNumber}} (showing {{.Shown}})</div>
 
-<div class="viewbar">
-  <span class="k">output 视图</span>
-  <span class="seg">
-    <a href="{{.RawViewURL}}" data-out-link="raw" class="{{if eq .OutView "raw"}}on{{end}}">raw_output</a>
-    <a href="{{.NormViewURL}}" data-out-link="normalized" class="{{if eq .OutView "normalized"}}on{{end}}">normalized_output</a>
-  </span>
-  <span>本页 {{.NormalizedCount}}/{{.Shown}} 条有 normalized_output</span>
-</div>
-
-
 <form class="filters" method="get" action="/">
-  <input type="hidden" name="out" value="{{.OutView}}">
   <div class="field">
     <label for="task_id">task_id</label>
     <select id="task_id" name="task_id">
@@ -158,46 +121,50 @@
   {{if .HasNext}}<a href="{{.NextURL}}">next ›</a> <a href="{{.LastURL}}">last »</a>{{end}}
 </div>
 
-<div class="turns" data-out-view-root data-out="{{.OutView}}">
-{{range .Rows}}
-<article class="turn" data-turn="{{.ID}}">
-  <header class="turn-head">
-    <a class="turn-id" href="{{.DetailURL}}">#{{.ID}}</a>
-    <span class="chip"><span class="k">task_id</span><span class="v">{{.TaskID}}</span></span>
-    <span class="chip"><span class="k">agent</span><span class="v">{{.Agent}}</span></span>
-    <span class="tag {{if eq .Mode "plan"}}plan{{else if eq .Mode "agent"}}agent{{end}}">{{.Mode}}</span>
-    <span class="chip"><span class="k">model</span><span class="v">{{.Model}}</span></span>
-    <span class="tag{{if eq .Status "error"}} error{{end}}">{{.Status}}</span>
-    <span class="chip"><span class="k">step</span><span class="v">{{.Step}}</span></span>
-    <span class="chip"><span class="k">created</span><span class="v">{{.CreatedAt}}</span></span>
-    <span class="pair-hint">input → output · {{.TotalTokens}} tok · {{.DurationMS}} ms</span>
-  </header>
-  <div class="pair">
-    <section class="pane pane-in">
-      <div class="pane-head"><span>input</span><span class="len">{{.InputLen}} chars</span></div>
-      <pre>{{.InputPreview}}</pre>
-      <a class="more" href="{{.DetailURL}}">view full input ›</a>
-    </section>
-    <section class="pane pane-out">
-      <div class="pane-head">
-        <span>output</span>
-        <span class="variant" data-out="raw">raw_output</span>
-        <span class="variant" data-out="normalized">normalized_output</span>
-        <span class="len" data-out="raw">{{.OutputLen}} chars</span>
-        <span class="len" data-out="normalized">{{.NormalizedLen}} chars</span>
-      </div>
-      <div class="ov" data-out="raw"><pre>{{.OutputPreview}}</pre></div>
-      <div class="ov" data-out="normalized">
-        {{if .HasNormalized}}<pre>{{.NormalizedPreview}}</pre>{{else}}<div class="none">该 turn 没有 normalized_output</div>{{end}}
-      </div>
-      <a class="more" href="{{.DetailURL}}">view full output ›</a>
-    </section>
-  </div>
-</article>
-{{else}}
-<div class="empty">no turns match these filters</div>
-{{end}}
-</div>
+<p class="hint-row">列表只显示元信息（input / output 只给字符数），点 #id 或 view › 到详情页看完整内容。</p>
+
+<table class="turns">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>task_id</th>
+      <th>agent</th>
+      <th>mode</th>
+      <th>model</th>
+      <th>status</th>
+      <th class="num">step</th>
+      <th>created_at</th>
+      <th class="num">tokens</th>
+      <th class="num">ms</th>
+      <th class="num">input chars</th>
+      <th class="num">output chars</th>
+      <th>normalized_output</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Rows}}
+    <tr class="turn" data-turn="{{.ID}}" data-href="{{.DetailURL}}">
+      <td><a class="turn-id" href="{{.DetailURL}}">#{{.ID}}</a></td>
+      <td class="mono">{{.TaskID}}</td>
+      <td class="mono">{{.Agent}}</td>
+      <td><span class="tag {{if eq .Mode "plan"}}plan{{else if eq .Mode "agent"}}agent{{end}}">{{.Mode}}</span></td>
+      <td class="mono">{{.Model}}</td>
+      <td><span class="tag{{if eq .Status "error"}} error{{end}}">{{.Status}}</span></td>
+      <td class="num">{{.Step}}</td>
+      <td class="mono">{{.CreatedAt}}</td>
+      <td class="num">{{.TotalTokens}}</td>
+      <td class="num">{{.DurationMS}}</td>
+      <td class="num">{{.InputLen}}</td>
+      <td class="num">{{.OutputLen}}</td>
+      <td>{{if .HasNormalized}}<span class="tag norm">✓</span>{{else}}<span class="dash">–</span>{{end}}</td>
+      <td class="open"><a href="{{.DetailURL}}">view ›</a></td>
+    </tr>
+  {{else}}
+    <tr><td class="empty" colspan="14">no turns match these filters</td></tr>
+  {{end}}
+  </tbody>
+</table>
 
 <div class="pager">
   <span>page {{.PageNumber}}</span>
@@ -205,29 +172,14 @@
   {{if .HasNext}}<a href="{{.NextURL}}">next ›</a> <a href="{{.LastURL}}">last »</a>{{end}}
 </div>
 <script>
-// Progressive enhancement: the raw_output / normalized_output toggle switches
-// panes instantly. The toggle is made of plain links, so with JavaScript off it
-// still works — just with a page load (?out=normalized).
+// Progressive enhancement: clicking anywhere on a row opens that turn's detail
+// page. The #id and "view ›" links work on their own without JavaScript.
 (function () {
-  var root = document.querySelector('[data-out-view-root]');
-  if (!root) return;
-  function apply(view) {
-    root.setAttribute('data-out', view);
-    document.querySelectorAll('a[data-out-link]').forEach(function (a) {
-      a.classList.toggle('on', a.getAttribute('data-out-link') === view);
-    });
-    var u = new URL(location.href);
-    if (view === 'normalized') u.searchParams.set('out', 'normalized');
-    else u.searchParams.delete('out');
-    history.replaceState(null, '', u);
-  }
   document.addEventListener('click', function (ev) {
     var t = ev.target;
-    if (!t || !t.closest) return;
-    var a = t.closest('a[data-out-link]');
-    if (!a) return;
-    ev.preventDefault();
-    apply(a.getAttribute('data-out-link'));
+    if (!t || !t.closest || t.closest('a')) return;
+    var row = t.closest('tr[data-href]');
+    if (row) location.href = row.getAttribute('data-href');
   });
 })();
 </script>
