@@ -1,0 +1,70 @@
+{{define "detail.gohtml"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reason_turn {{.Turn.ID}} · agent benchmark</title>
+<style>
+  :root { --line:#e2e5ea; --muted:#6b7280; --head:#f6f7f9; --accent:#1f6feb; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 24px 60px; font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; color:#111; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:22px 0 6px; }
+  a { color:var(--accent); text-decoration:none; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:14px; word-break:break-all; }
+  dl.meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:2px 16px;
+            margin:0; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--head); }
+  dl.meta div { display:flex; gap:8px; min-width:0; padding:2px 0; }
+  dl.meta dt { color:var(--muted); min-width:104px; }
+  dl.meta dd { margin:0; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
+  pre.box { margin:0; padding:12px; border:1px solid var(--line); border-radius:8px; background:#fcfcfd;
+            font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+            white-space:pre-wrap; word-break:break-word; max-height:70vh; overflow:auto; }
+  details pre.box { margin-top:8px; }
+  .hint { color:var(--muted); font-size:11px; margin:4px 0 0; }
+  .tag { display:inline-block; padding:1px 6px; border-radius:10px; background:#eef2f7; font-size:11px; color:#334155; }
+</style>
+</head>
+<body>
+<p><a href="/">« back to list</a> · <a href="/api/reason-turns/{{.Turn.ID}}">json</a></p>
+<h1>reason_turn #{{.Turn.ID}}</h1>
+<div class="sub">db: {{.DBPath}}</div>
+
+<dl class="meta">
+  <div><dt>task_id</dt><dd>{{.Turn.TaskID}}</dd></div>
+  <div><dt>agent</dt><dd>{{.Turn.Agent}}</dd></div>
+  <div><dt>agent_id</dt><dd>{{.Turn.AgentID}}</dd></div>
+  <div><dt>step</dt><dd>{{.Turn.Step}}</dd></div>
+  <div><dt>mode</dt><dd><span class="tag">{{.Turn.Mode}}</span></dd></div>
+  <div><dt>model</dt><dd>{{.Turn.Model}}</dd></div>
+  <div><dt>provider</dt><dd>{{.Turn.Provider}}</dd></div>
+  <div><dt>status</dt><dd>{{.Turn.Status}}</dd></div>
+  <div><dt>created_at</dt><dd>{{.Turn.CreatedAt}}</dd></div>
+  <div><dt>started_at</dt><dd>{{.Turn.StartedAt}}</dd></div>
+  <div><dt>ended_at</dt><dd>{{.Turn.EndedAt}}</dd></div>
+  <div><dt>duration_ms</dt><dd>{{.Turn.DurationMS}}</dd></div>
+  <div><dt>run_id</dt><dd>{{.Turn.RunID}}</dd></div>
+  <div><dt>llm_agent_id</dt><dd>{{.Turn.LLMAgentID}}</dd></div>
+  <div><dt>llm_events</dt><dd>{{.Turn.EventCount}}</dd></div>
+  <div><dt>tokens in/out</dt><dd>{{.Turn.InputTokens}} / {{.Turn.OutputTokens}}</dd></div>
+  <div><dt>tokens cache r/w</dt><dd>{{.Turn.CacheReadTokens}} / {{.Turn.CacheWriteTokens}}</dd></div>
+  <div><dt>tokens reasoning</dt><dd>{{.Turn.ReasoningTokens}}</dd></div>
+  <div><dt>tokens total</dt><dd>{{.Turn.TotalTokens}}</dd></div>
+  <div><dt>cost_cents</dt><dd>{{.Cost}}</dd></div>
+  {{if .Turn.ErrorCode}}<div><dt>error_code</dt><dd>{{.Turn.ErrorCode}}</dd></div>{{end}}
+  {{if .Turn.ErrorMessage}}<div><dt>error_message</dt><dd>{{.Turn.ErrorMessage}}</dd></div>{{end}}
+</dl>
+
+<h2>input <span class="hint">({{.InputLen}} chars)</span></h2>
+<pre class="box">{{.Turn.Input}}</pre>
+
+<h2>output · raw_output <span class="hint">({{.OutputLen}} chars)</span></h2>
+<pre class="box">{{.Turn.Output}}</pre>
+
+{{if .Turn.NormalizedOutput}}
+<h2>normalized_output</h2>
+<details open><summary class="hint">{{.NormalizedLen}} chars</summary><pre class="box">{{.Turn.NormalizedOutput}}</pre></details>
+{{end}}
+</body>
+</html>
+{{end}}
