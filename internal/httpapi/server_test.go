@@ -62,7 +62,7 @@ var fixtureSeeds = []string{
 	   ('task-1', 1, 1, 'plan', 'cursor', 'composer-2.5', '<script>alert(1)</script> PLAN PROMPT',
 	    'raw plan output', '{"type":"plan"}', 'run-a', 'finished', 1200, 4200, 1.25, '2026-09-14T10:00:00Z'),
 	   ('task-1', 1, 0, 'agent', 'cursor', 'composer-2.5', 'AGENT PROMPT ONE', 'did the thing',
-	    'did the thing', 'run-b', 'finished', 800, 900, NULL, '2026-09-14T10:05:00Z'),
+	    '', 'run-b', 'finished', 800, 900, NULL, '2026-09-14T10:05:00Z'),
 	   ('task-2', 2, 1, 'plan', 'cline', 'deepseek-v4-pro', 'PLAN PROMPT TWO', 'plan two',
 	    'plan two', 'run-c', 'error', 300, 100, NULL, '2026-09-14T11:00:00Z')`,
 }
@@ -261,8 +261,9 @@ func TestListPageHTML(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		"<th>id</th>", "<th>task_id</th>", "<th>agent</th>", "<th>mode</th>", "<th>model</th>",
-		"<th>input</th>", "<th>output</th>",
+		`class="turn" data-turn="1"`, `class="turn" data-turn="3"`,
+		"pane pane-in", "pane pane-out",
+		"<span>input</span>", "<span>output</span>",
 		"task-1", "task-2", "agent-0001", "composer-2.5", "deepseek-v4-pro",
 		`href="/turns/3"`,
 	} {
@@ -270,6 +271,28 @@ func TestListPageHTML(t *testing.T) {
 			t.Fatalf("list page is missing %q", want)
 		}
 	}
+
+	// input is the left pane and output the right one, inside the same turn card.
+	for _, id := range []string{"1", "2", "3"} {
+		card := body
+		if i := strings.Index(body, `data-turn="`+id+`"`); i >= 0 {
+			card = body[i:]
+			if end := strings.Index(card, "</article>"); end >= 0 {
+				card = card[:end]
+			}
+		} else {
+			t.Fatalf("turn %s card missing", id)
+		}
+		in := strings.Index(card, "pane pane-in")
+		out := strings.Index(card, "pane pane-out")
+		if in < 0 || out < 0 || in > out {
+			t.Fatalf("turn %s: expected input pane left of output pane (in=%d out=%d)", id, in, out)
+		}
+		if !strings.Contains(card, `class="pair"`) {
+			t.Fatalf("turn %s: expected a left/right pair wrapper", id)
+		}
+	}
+
 	// The prompt is escaped, never injected as markup.
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatal("prompt was not HTML-escaped")
@@ -278,11 +301,97 @@ func TestListPageHTML(t *testing.T) {
 		t.Fatal("expected escaped prompt preview in the page")
 	}
 
-	// Filters are honoured and reflected in the page.
+	// Output view toggle: defaults to raw_output, and both variants are in the
+	// DOM so the switch needs no round trip (only one is visible via CSS).
+	if !strings.Contains(body, `data-out-view-root data-out="raw"`) {
+		t.Fatalf("expected the output view root to default to raw, got:\n%s", firstLines(body, 40))
+	}
+	if !strings.Contains(body, `data-out-link="raw"`) || !strings.Contains(body, `data-out-link="normalized"`) {
+		t.Fatal("expected both output view toggle links")
+	}
+	if strings.Count(body, `data-out="raw"`) < 2 || strings.Count(body, `data-out="normalized"`) < 2 {
+		t.Fatal("expected raw and normalized panes to both be rendered")
+	}
+
+	// ?out=normalized selects the other variant and keeps the toggle in sync.
+	rec = get(t, srv, "/?out=normalized")
+	nbody := rec.Body.String()
+	if !strings.Contains(nbody, `data-out-view-root data-out="normalized"`) {
+		t.Fatal("?out=normalized should select the normalized view")
+	}
+	if !strings.Contains(nbody, `href="?out=normalized" data-out-link="normalized" class="on"`) &&
+		!strings.Contains(nbody, `data-out-link="normalized" class="on"`) {
+		t.Fatal("?out=normalized should mark the normalized toggle as active")
+	}
+	if !strings.Contains(nbody, `class="on"`) {
+		t.Fatal("expected an active segment in the toggle")
+	}
+	// The view survives pagination and filter links.
+	if !strings.Contains(nbody, "out=normalized") {
+		t.Fatal("expected pager/form links to keep the selected view")
+	}
+
+	// A turn without normalized output says so instead of showing an empty pane.
+	if n := strings.Count(nbody, "该 turn 没有 normalized_output"); n != 1 {
+		t.Fatalf("expected exactly one turn to report a missing normalized_output, got %d", n)
+	}
+	if !strings.Contains(nbody, "本页 2/3 条有 normalized_output") {
+		t.Fatal("expected the view bar to report how many turns have a normalized output")
+	}
+
+	// Filters are honoured and reflected in the page, and keep the view.
 	rec = get(t, srv, "/?mode=agent&limit=25")
-	if body := rec.Body.String(); !strings.Contains(body, "AGENT PROMPT ONE") ||
-		strings.Contains(body, "PLAN PROMPT TWO") {
-		t.Fatalf("filtered page unexpected:\n%s", body)
+	if fbody := rec.Body.String(); !strings.Contains(fbody, "AGENT PROMPT ONE") ||
+		strings.Contains(fbody, "PLAN PROMPT TWO") {
+		t.Fatalf("filtered page unexpected:\n%s", fbody)
+	}
+}
+
+// firstLines keeps failure output readable.
+func firstLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestDetailPageOutputToggle(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Default: raw output, with the normalized variant present but hidden.
+	body := get(t, srv, "/turns/1").Body.String()
+	if !strings.Contains(body, `data-out-view-root data-out="raw"`) {
+		t.Fatal("detail page should default to the raw output view")
+	}
+	if !strings.Contains(body, `class="box" data-out="raw">raw plan output`) {
+		t.Fatalf("expected the raw output paragraph:\n%s", firstLines(body, 200))
+	}
+	// html/template escapes quotes in text nodes, so the JSON shows as &#34;.
+	if !strings.Contains(body, `class="box" data-out="normalized">{&#34;type&#34;:&#34;plan&#34;}`) {
+		t.Fatalf("expected the normalized output paragraph to be rendered too:\n%s", firstLines(body, 200))
+	}
+	// Both variants are never visible at once: the CSS hides one of them.
+	if !strings.Contains(body, `[data-out="raw"] [data-out="normalized"]`) {
+		t.Fatal("expected the CSS rule that hides the unselected variant")
+	}
+
+	// ?out=normalized flips the selected variant.
+	nbody := get(t, srv, "/turns/1?out=normalized").Body.String()
+	if !strings.Contains(nbody, `data-out-view-root data-out="normalized"`) {
+		t.Fatal("?out=normalized should select the normalized output")
+	}
+	if !strings.Contains(nbody, `href="/turns/1?out=normalized" data-out-link="normalized" class="on"`) {
+		t.Fatal("expected the normalized toggle link to be active and self-referencing")
+	}
+
+	// A turn with no normalized output explains that instead of rendering blank.
+	empty := get(t, srv, "/turns/2?out=normalized").Body.String()
+	if !strings.Contains(empty, "该 turn 没有 normalized_output（模型返回未归一化）") {
+		t.Fatal("expected a note for a turn without normalized output")
+	}
+	if !strings.Contains(empty, `class="box" data-out="raw">did the thing</pre>`) {
+		t.Fatal("expected the raw output to still be rendered (CSS hides it when normalized is selected)")
 	}
 }
 
@@ -301,6 +410,14 @@ func TestDetailPageHTML(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("detail page is missing %q", want)
 		}
+	}
+	// input (left) and output (right) are paired side by side.
+	if !strings.Contains(body, `class="pair"`) || !strings.Contains(body, `class="side in"`) ||
+		!strings.Contains(body, `class="side out"`) {
+		t.Fatal("detail page is missing the input/output pair layout")
+	}
+	if in, out := strings.Index(body, `class="side in"`), strings.Index(body, `class="side out"`); in < 0 || out < 0 || in > out {
+		t.Fatalf("detail page: expected input left of output (in=%d out=%d)", in, out)
 	}
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatal("detail page did not escape the prompt")

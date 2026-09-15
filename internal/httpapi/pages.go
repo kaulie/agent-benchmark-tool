@@ -27,7 +27,12 @@ type rowView struct {
 	OutputPreview string
 	InputLen      int
 	OutputLen     int
-	DetailURL     string
+	// Normalized output is the sibling view of the raw output, switched by the
+	// UI toggle (not shown at the same time).
+	NormalizedPreview string
+	NormalizedLen     int
+	HasNormalized     bool
+	DetailURL         string
 }
 
 // listView is the model for the list page.
@@ -51,6 +56,13 @@ type listView struct {
 
 	LimitOptions []int
 	OrderOptions []string
+
+	// OutView selects which output column the output pane shows: raw or
+	// normalized. ToggleURLs preserve filters and page.
+	OutView         string
+	RawViewURL      string
+	NormViewURL     string
+	NormalizedCount int
 }
 
 // detailView is the model for the single-turn page.
@@ -61,6 +73,10 @@ type detailView struct {
 	OutputLen     int
 	NormalizedLen int
 	Cost          string
+
+	OutView     string
+	RawViewURL  string
+	NormViewURL string
 }
 
 func (s *Server) handleListPage(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +96,7 @@ func (s *Server) handleListPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base := listQuery(req.opts)
+	base := listQuery(req.opts, req.out)
 	view := listView{
 		DBPath:     s.store.Path(),
 		Total:      page.Total,
@@ -101,25 +117,36 @@ func (s *Server) handleListPage(w http.ResponseWriter, r *http.Request) {
 
 		LimitOptions: []int{25, 50, 100, 200, 500},
 		OrderOptions: []string{"id", "created_at", "duration_ms", "total_tokens"},
+
+		OutView:     req.out,
+		RawViewURL:  "/?" + withOut(base, outRaw),
+		NormViewURL: "/?" + withOut(base, outNormalized),
 	}
 	for _, t := range page.Turns {
+		hasNorm := t.NormalizedOutput != ""
+		if hasNorm {
+			view.NormalizedCount++
+		}
 		view.Rows = append(view.Rows, rowView{
-			ID:            t.ID,
-			TaskID:        t.TaskID,
-			Agent:         t.Agent,
-			Mode:          t.Mode,
-			Model:         t.Model,
-			Provider:      t.Provider,
-			Status:        t.Status,
-			Step:          t.Step,
-			CreatedAt:     t.CreatedAt,
-			DurationMS:    t.DurationMS,
-			TotalTokens:   t.TotalTokens,
-			InputPreview:  store.Preview(t.Input, s.previewRunes),
-			OutputPreview: store.Preview(t.Output, s.previewRunes),
-			InputLen:      len([]rune(t.Input)),
-			OutputLen:     len([]rune(t.Output)),
-			DetailURL:     "/turns/" + strconv.FormatInt(t.ID, 10),
+			ID:                t.ID,
+			TaskID:            t.TaskID,
+			Agent:             t.Agent,
+			Mode:              t.Mode,
+			Model:             t.Model,
+			Provider:          t.Provider,
+			Status:            t.Status,
+			Step:              t.Step,
+			CreatedAt:         t.CreatedAt,
+			DurationMS:        t.DurationMS,
+			TotalTokens:       t.TotalTokens,
+			InputPreview:      store.Preview(t.Input, s.previewRunes),
+			OutputPreview:     store.Preview(t.Output, s.previewRunes),
+			NormalizedPreview: store.Preview(t.NormalizedOutput, s.previewRunes),
+			InputLen:          len([]rune(t.Input)),
+			OutputLen:         len([]rune(t.Output)),
+			NormalizedLen:     len([]rune(t.NormalizedOutput)),
+			HasNormalized:     hasNorm,
+			DetailURL:         "/turns/" + strconv.FormatInt(t.ID, 10),
 		})
 	}
 	s.render(w, http.StatusOK, "list.gohtml", view)
@@ -145,6 +172,10 @@ func (s *Server) handleDetailPage(w http.ResponseWriter, r *http.Request) {
 		InputLen:      len([]rune(turn.Input)),
 		OutputLen:     len([]rune(turn.Output)),
 		NormalizedLen: len([]rune(turn.NormalizedOutput)),
+
+		OutView:     parseOutView(r.URL.Query()),
+		RawViewURL:  "/turns/" + strconv.FormatInt(id, 10) + "?out=" + outRaw,
+		NormViewURL: "/turns/" + strconv.FormatInt(id, 10) + "?out=" + outNormalized,
 	}
 	if turn.CostCents != nil {
 		view.Cost = strconv.FormatFloat(*turn.CostCents, 'f', 4, 64)
@@ -161,7 +192,7 @@ func (s *Server) render(w http.ResponseWriter, code int, name string, data any) 
 }
 
 // listQuery turns the applied filters into a link-preserving query string.
-func listQuery(opts store.ListOptions) url.Values {
+func listQuery(opts store.ListOptions, outView string) url.Values {
 	q := url.Values{}
 	set := func(k, v string) {
 		if v != "" {
@@ -181,7 +212,25 @@ func listQuery(opts store.ListOptions) url.Values {
 		q.Set("dir", "asc")
 	}
 	q.Set("limit", strconv.Itoa(opts.Limit))
+	if outView == outNormalized {
+		q.Set("out", outNormalized)
+	}
 	return q
+}
+
+// withOut returns the same query with the output view switched, used by the
+// segmented toggle links.
+func withOut(base url.Values, view string) string {
+	q := url.Values{}
+	for k, v := range base {
+		q[k] = v
+	}
+	if view == outNormalized {
+		q.Set("out", outNormalized)
+	} else {
+		q.Del("out")
+	}
+	return q.Encode()
 }
 
 func withOffset(base url.Values, offset int) string {

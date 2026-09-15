@@ -70,7 +70,7 @@ func New(st TurnReader) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("httpapi: parse templates: %w", err)
 	}
-	return &Server{store: st, tmpl: tmpl, previewRunes: 320}, nil
+	return &Server{store: st, tmpl: tmpl, previewRunes: 480}, nil
 }
 
 // Handler wires the routes.
@@ -93,6 +93,23 @@ type listRequest struct {
 	opts     store.ListOptions
 	preview  bool
 	truncate int
+	// out selects the output view shown in the HTML output pane: "raw" (default)
+	// or "normalized". It never changes the JSON API, which returns both.
+	out string
+}
+
+// Output views for the HTML output pane.
+const (
+	outRaw        = "raw"
+	outNormalized = "normalized"
+)
+
+// parseOutView reads ?out=, defaulting to the raw output.
+func parseOutView(q url.Values) string {
+	if strings.EqualFold(strings.TrimSpace(q.Get("out")), outNormalized) {
+		return outNormalized
+	}
+	return outRaw
 }
 
 func parseInt(q url.Values, key string, def int) int {
@@ -119,6 +136,7 @@ func parseListRequest(q url.Values) listRequest {
 		},
 		preview:  q.Get("preview") == "1" || strings.EqualFold(q.Get("preview"), "true"),
 		truncate: parseInt(q, "truncate", 400),
+		out:      parseOutView(q),
 	}
 	// dir=asc|desc, default desc (newest first).
 	req.opts.Desc = !strings.EqualFold(strings.TrimSpace(q.Get("dir")), "asc")
