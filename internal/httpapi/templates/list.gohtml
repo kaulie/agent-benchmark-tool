@@ -1,0 +1,155 @@
+{{define "list.gohtml"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reason_turns · agent benchmark</title>
+<style>
+  :root { --line:#e2e5ea; --muted:#6b7280; --head:#f6f7f9; --accent:#1f6feb; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 24px 60px; font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+         color:#111; background:#fff; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:14px; word-break:break-all; }
+  form.filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px 12px;
+                 align-items:end; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--head); }
+  .field { display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .field label { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  select, input[type=text] { width:100%; padding:5px 6px; border:1px solid var(--line); border-radius:5px; background:#fff; font:inherit; }
+  .actions { display:flex; gap:8px; }
+  button { padding:6px 12px; border:1px solid var(--accent); border-radius:5px; background:var(--accent);
+           color:#fff; font:inherit; cursor:pointer; }
+  a.reset { align-self:center; color:var(--muted); font-size:12px; }
+  .pager { display:flex; gap:12px; align-items:center; margin:14px 0; color:var(--muted); font-size:12px; }
+  .pager a { color:var(--accent); text-decoration:none; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th, td { border:1px solid var(--line); padding:6px 8px; vertical-align:top; text-align:left; }
+  thead th { position:sticky; top:0; background:var(--head); font-size:11px; text-transform:uppercase;
+             letter-spacing:.04em; color:var(--muted); z-index:1; }
+  tbody tr:hover { background:#f9fbff; }
+  td.mono, pre { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
+  pre { margin:0; white-space:pre-wrap; word-break:break-word; max-height:150px; overflow:hidden; }
+  td.id { white-space:nowrap; }
+  td.id a { color:var(--accent); text-decoration:none; font-weight:600; }
+  .tag { display:inline-block; padding:1px 6px; border-radius:10px; background:#eef2f7; font-size:11px; color:#334155; }
+  .tag.error { background:#fee2e2; color:#991b1b; }
+  .len { color:var(--muted); font-size:11px; margin-top:2px; }
+  .empty { padding:24px; text-align:center; color:var(--muted); }
+  col.c-id{width:52px} col.c-task{width:92px} col.c-agent{width:112px} col.c-mode{width:62px}
+  col.c-model{width:118px} col.c-status{width:72px} col.c-time{width:150px}
+</style>
+</head>
+<body>
+<h1>reason_turns</h1>
+<div class="sub">db: {{.DBPath}} · {{.Total}} matching turns · page {{.PageNumber}} (showing {{.Shown}})</div>
+
+
+<form class="filters" method="get" action="/">
+  <div class="field">
+    <label for="task_id">task_id</label>
+    <select id="task_id" name="task_id">
+      <option value="">all</option>
+      {{range .Facets.Tasks}}<option value="{{.Value}}" {{if eq .Value $.Filters.TaskID}}selected{{end}}>{{.Value}} ({{.Count}})</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="agent">agent</label>
+    <select id="agent" name="agent">
+      <option value="">all</option>
+      {{range .Facets.Agents}}<option value="{{.Value}}" {{if eq .Value $.Filters.Agent}}selected{{end}}>{{.Value}} ({{.Count}})</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="mode">mode</label>
+    <select id="mode" name="mode">
+      <option value="">all</option>
+      {{range .Facets.Modes}}<option value="{{.Value}}" {{if eq .Value $.Filters.Mode}}selected{{end}}>{{.Value}} ({{.Count}})</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="model">model</label>
+    <select id="model" name="model">
+      <option value="">all</option>
+      {{range .Facets.Models}}<option value="{{.Value}}" {{if eq .Value $.Filters.Model}}selected{{end}}>{{.Value}} ({{.Count}})</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="status">status</label>
+    <select id="status" name="status">
+      <option value="">all</option>
+      {{range .Facets.Statuses}}<option value="{{.Value}}" {{if eq .Value $.Filters.Status}}selected{{end}}>{{.Value}} ({{.Count}})</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="q">search input/output</label>
+    <input type="text" id="q" name="q" value="{{.Filters.Query}}" placeholder="substring">
+  </div>
+  <div class="field">
+    <label for="limit">page size</label>
+    <select id="limit" name="limit">
+      {{range .LimitOptions}}<option value="{{.}}" {{if eq . $.Limit}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="order">sort</label>
+    <select id="order" name="order">
+      {{range .OrderOptions}}<option value="{{.}}" {{if eq . $.Filters.Order}}selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </div>
+  <div class="field">
+    <label for="dir">direction</label>
+    <select id="dir" name="dir">
+      <option value="desc" {{if eq .Filters.Dir "desc"}}selected{{end}}>desc</option>
+      <option value="asc" {{if eq .Filters.Dir "asc"}}selected{{end}}>asc</option>
+    </select>
+  </div>
+  <div class="actions">
+    <button type="submit">apply</button>
+    <a class="reset" href="{{.ResetURL}}">reset</a>
+  </div>
+</form>
+
+<div class="pager">
+  <span>page {{.PageNumber}}</span>
+  {{if .HasPrev}}<a href="{{.FirstURL}}">« first</a> <a href="{{.PrevURL}}">‹ prev</a>{{end}}
+  {{if .HasNext}}<a href="{{.NextURL}}">next ›</a> <a href="{{.LastURL}}">last »</a>{{end}}
+</div>
+
+<table>
+  <colgroup>
+    <col class="c-id"><col class="c-task"><col class="c-agent"><col class="c-mode">
+    <col class="c-model"><col class="c-status"><col class="c-time">
+  </colgroup>
+  <thead>
+    <tr>
+      <th>id</th><th>task_id</th><th>agent</th><th>mode</th><th>model</th>
+      <th>status</th><th>created_at</th><th>input</th><th>output</th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .Rows}}
+    <tr>
+      <td class="id"><a href="{{.DetailURL}}">{{.ID}}</a></td>
+      <td class="mono">{{.TaskID}}</td>
+      <td class="mono">{{.Agent}}</td>
+      <td><span class="tag">{{.Mode}}</span></td>
+      <td class="mono">{{.Model}}</td>
+      <td>{{if eq .Status "error"}}<span class="tag error">{{.Status}}</span>{{else}}{{.Status}}{{end}}</td>
+      <td class="mono">{{.CreatedAt}}</td>
+      <td>
+        <pre>{{.InputPreview}}</pre>
+        <div class="len">{{.InputLen}} chars</div>
+      </td>
+      <td>
+        <pre>{{.OutputPreview}}</pre>
+        <div class="len">{{.OutputLen}} chars · <a href="{{.DetailURL}}">open</a></div>
+      </td>
+    </tr>
+  {{else}}
+    <tr><td class="empty" colspan="9">no turns match these filters</td></tr>
+  {{end}}
+  </tbody>
+</table>
+</body>
+</html>
+{{end}}
