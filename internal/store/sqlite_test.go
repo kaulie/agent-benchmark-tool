@@ -70,20 +70,54 @@ func newFixtureDB(t *testing.T, schema string, seed ...string) string {
 	return path
 }
 
+// tasksSchema is the optional tasks table: each task's own definition (the
+// "original content" a run started from).
+const tasksSchema = `
+CREATE TABLE tasks (
+  id TEXT PRIMARY KEY,
+  description TEXT NOT NULL DEFAULT '',
+  domain TEXT NOT NULL DEFAULT '',
+  context TEXT NOT NULL DEFAULT '',
+  target TEXT NOT NULL DEFAULT '',
+  goal TEXT NOT NULL DEFAULT '',
+  expected_state TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  agent_id INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`
+
+// seedAgents/seedTurnRows are the shared reason_turns fixture rows.
+const (
+	seedAgents = `INSERT INTO agents (id, name, state, llm_provider, model) VALUES
+	   (1, 'agent-0001', 'deleted', 'cursor', 'composer-2.5'),
+	   (2, 'agent-0002', 'running', 'cline', 'deepseek-v4-pro')`
+
+	seedTurnRows = `INSERT INTO reason_turns (task_id, agent_id, step, mode, llm_provider, model, input, raw_output,
+	   normalized_output, run_id, status, duration_ms, total_tokens, cost_cents, created_at) VALUES
+	   ('task-1', 1, 1, 'plan', 'cursor', 'composer-2.5', 'PLAN PROMPT ONE', 'FENCED {json} plan',
+	    '{"type":"plan"}', 'run-a', 'finished', 1200, 4200, 1.25, '2026-09-14T10:00:00Z'),
+	   ('task-1', 1, 0, 'agent', 'cursor', 'composer-2.5', 'AGENT PROMPT ONE', 'did the thing',
+	    'did the thing', 'run-b', 'finished', 800, 900, NULL, '2026-09-14T10:05:00Z'),
+	   ('task-2', 2, 1, 'plan', 'cline', 'deepseek-v4-pro', 'PLAN PROMPT TWO', 'plan two',
+	    'plan two', 'run-c', 'error', 300, 100, NULL, '2026-09-14T11:00:00Z')`
+)
+
 func seedTurns(t *testing.T) string {
 	t.Helper()
-	return newFixtureDB(t, currentSchema,
-		`INSERT INTO agents (id, name, state, llm_provider, model) VALUES
-		   (1, 'agent-0001', 'deleted', 'cursor', 'composer-2.5'),
-		   (2, 'agent-0002', 'running', 'cline', 'deepseek-v4-pro')`,
-		`INSERT INTO reason_turns (task_id, agent_id, step, mode, llm_provider, model, input, raw_output,
-		   normalized_output, run_id, status, duration_ms, total_tokens, cost_cents, created_at) VALUES
-		   ('task-1', 1, 1, 'plan', 'cursor', 'composer-2.5', 'PLAN PROMPT ONE', 'FENCED {json} plan',
-		    '{"type":"plan"}', 'run-a', 'finished', 1200, 4200, 1.25, '2026-09-14T10:00:00Z'),
-		   ('task-1', 1, 0, 'agent', 'cursor', 'composer-2.5', 'AGENT PROMPT ONE', 'did the thing',
-		    'did the thing', 'run-b', 'finished', 800, 900, NULL, '2026-09-14T10:05:00Z'),
-		   ('task-2', 2, 1, 'plan', 'cline', 'deepseek-v4-pro', 'PLAN PROMPT TWO', 'plan two',
-		    'plan two', 'run-c', 'error', 300, 100, NULL, '2026-09-14T11:00:00Z')`)
+	return newFixtureDB(t, currentSchema, seedAgents, seedTurnRows)
+}
+
+// seedTaskDefinitions adds the tasks table on top of the log fixture.
+func seedTaskDefinitions(t *testing.T) string {
+	t.Helper()
+	return newFixtureDB(t, currentSchema+tasksSchema, seedAgents, seedTurnRows,
+		`INSERT INTO tasks (id, description, domain, status, agent_id, created_at, updated_at) VALUES
+		   ('task-1', 'normalize deployment event names', 'software_development', 'completed', 1,
+		    '2026-09-14T09:59:00Z', '2026-09-14T10:06:00Z'),
+		   ('task-2', 'ship the thing', '', 'error', 2,
+		    '2026-09-14T10:59:00Z', '2026-09-14T11:01:00Z')`)
 }
 
 func TestListWithoutFilters(t *testing.T) {
@@ -322,5 +356,90 @@ func TestPreviewTruncatesRunes(t *testing.T) {
 	}
 	if got := Preview("  spaced  ", 0); got != "spaced" {
 		t.Fatalf("preview=%q", got)
+	}
+}
+
+func TestTasksAndTaskTurns(t *testing.T) {
+	s, err := OpenReadOnly(seedTaskDefinitions(t))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	if !s.HasTasks() {
+		t.Fatal("HasTasks() = false, want true with a tasks table")
+	}
+
+	options, err := s.Tasks(ctx)
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if len(options) != 2 {
+		t.Fatalf("options=%d, want 2: %+v", len(options), options)
+	}
+	// Most recent activity first: task-2's only turn is at 11:00.
+	if options[0].ID != "task-2" || options[0].Turns != 1 || options[0].LastAt != "2026-09-14T11:00:00Z" ||
+		options[0].Description != "ship the thing" {
+		t.Fatalf("options[0]=%+v", options[0])
+	}
+	if options[1].ID != "task-1" || options[1].Turns != 2 || options[1].Description != "normalize deployment event names" {
+		t.Fatalf("options[1]=%+v", options[1])
+	}
+
+	task, err := s.Task(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("task: %v", err)
+	}
+	if task.Description != "normalize deployment event names" || task.Domain != "software_development" ||
+		task.Status != "completed" || task.AgentID != 1 || task.CreatedAt != "2026-09-14T09:59:00Z" {
+		t.Fatalf("task=%+v", task)
+	}
+	if _, err := s.Task(ctx, "ghost"); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("err=%v, want ErrTaskNotFound", err)
+	}
+
+	// Execution order is by created_at: the plan turn precedes the agent turn
+	// even though the agent turn has the lower step number.
+	turns, err := s.TaskTurns(ctx, "task-1", TaskTurnsLimit)
+	if err != nil {
+		t.Fatalf("task turns: %v", err)
+	}
+	if len(turns) != 2 || turns[0].ID != 1 || turns[0].Mode != "plan" ||
+		turns[1].ID != 2 || turns[1].Mode != "agent" {
+		t.Fatalf("turns=%+v", turns)
+	}
+	if got, err := s.TaskTurns(ctx, "ghost", TaskTurnsLimit); err != nil || len(got) != 0 {
+		t.Fatalf("ghost turns=%d err=%v", len(got), err)
+	}
+
+	// The per-side cap is honoured.
+	if got, err := s.TaskTurns(ctx, "task-1", 1); err != nil || len(got) != 1 || got[0].ID != 1 {
+		t.Fatalf("capped turns=%+v err=%v", got, err)
+	}
+}
+
+// A log-only database (no tasks table) still lists tasks for the picker; only
+// the task definition is missing.
+func TestTasksWithoutTasksTable(t *testing.T) {
+	s, err := OpenReadOnly(seedTurns(t))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+
+	if s.HasTasks() {
+		t.Fatal("HasTasks() = true without a tasks table")
+	}
+	options, err := s.Tasks(ctx)
+	if err != nil {
+		t.Fatalf("tasks: %v", err)
+	}
+	if len(options) != 2 || options[0].ID != "task-2" || options[0].Turns != 1 || options[0].Description != "" {
+		t.Fatalf("options=%+v", options)
+	}
+	if _, err := s.Task(ctx, "task-1"); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("err=%v, want ErrTaskNotFound", err)
 	}
 }

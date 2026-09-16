@@ -29,6 +29,10 @@ type SQLite struct {
 	rawOutputColumn string
 	// hasAgentsTable is true when the agents table exists to join for names.
 	hasAgentsTable bool
+	// hasTasksTable / taskColumns describe the optional tasks table, which holds
+	// each task's own definition (its "original content").
+	hasTasksTable bool
+	taskColumns   map[string]bool
 }
 
 // OpenReadOnly opens path read-only and validates that it looks like a
@@ -127,7 +131,62 @@ func (s *SQLite) introspect(ctx context.Context) error {
 		return fmt.Errorf("store: inspect tables of %s: %w", s.path, err)
 	}
 	s.hasAgentsTable = agents > 0
+
+	var tasks int
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'tasks'`).Scan(&tasks)
+	if err != nil {
+		return fmt.Errorf("store: inspect tables of %s: %w", s.path, err)
+	}
+	s.hasTasksTable = tasks > 0
+	if s.hasTasksTable {
+		// tasks is optional and its columns drifted over time, so probe it the
+		// same way as reason_turns and degrade to literals for missing ones.
+		if s.taskColumns, err = s.tableColumns(ctx, "tasks"); err != nil {
+			return err
+		}
+	} else {
+		s.taskColumns = map[string]bool{}
+	}
 	return nil
+}
+
+// tableColumns returns the column names of table.
+func (s *SQLite) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, fmt.Errorf("store: read schema of %s.%s: %w", s.path, table, err)
+	}
+	defer rows.Close()
+
+	cols := map[string]bool{}
+	for rows.Next() {
+		var (
+			cid, notNull, pk int
+			name, typ        string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return nil, fmt.Errorf("store: scan schema of %s.%s: %w", s.path, table, err)
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read schema of %s.%s: %w", s.path, table, err)
+	}
+	return cols, nil
+}
+
+// HasTasks reports whether the database carries a tasks table (the task
+// definitions). Databases with only a reason_turns log return false.
+func (s *SQLite) HasTasks() bool { return s.hasTasksTable }
+
+// taskCol returns a tasks column reference when present, or a literal default.
+func (s *SQLite) taskCol(name, fallback string) string {
+	if s.taskColumns[name] {
+		return "COALESCE(t." + name + ", '')"
+	}
+	return fallback
 }
 
 // column returns the qualified column reference when present, or fallback.
@@ -390,4 +449,108 @@ func (s *SQLite) facet(ctx context.Context, expr string) ([]FacetValue, error) {
 		values = append(values, v)
 	}
 	return values, rows.Err()
+}
+
+// Task returns one task definition from the tasks table. Databases without a
+// tasks table (log-only fixtures, legacy dumps) report ErrTaskNotFound.
+func (s *SQLite) Task(ctx context.Context, id string) (TaskInfo, error) {
+	id = strings.TrimSpace(id)
+	if !s.hasTasksTable || id == "" {
+		return TaskInfo{}, ErrTaskNotFound
+	}
+	query := "SELECT " + strings.Join([]string{
+		s.taskCol("id", "''"),
+		s.taskCol("description", "''"),
+		s.taskCol("domain", "''"),
+		s.taskCol("context", "''"),
+		s.taskCol("target", "''"),
+		s.taskCol("goal", "''"),
+		s.taskCol("expected_state", "''"),
+		s.taskCol("status", "''"),
+		s.taskCol("agent_id", "''"),
+		s.taskCol("created_at", "''"),
+		s.taskCol("updated_at", "''"),
+	}, ", ") + " FROM tasks t WHERE t.id = ?"
+
+	var (
+		t       TaskInfo
+		agentID string
+	)
+	err := s.db.QueryRowContext(ctx, query, id).Scan(
+		&t.ID, &t.Description, &t.Domain, &t.Context, &t.Target, &t.Goal,
+		&t.ExpectedState, &t.Status, &agentID, &t.CreatedAt, &t.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TaskInfo{}, ErrTaskNotFound
+	}
+	if err != nil {
+		return TaskInfo{}, fmt.Errorf("store: get task %s: %w", id, err)
+	}
+	if n, parseErr := strconv.ParseInt(strings.TrimSpace(agentID), 10, 64); parseErr == nil {
+		t.AgentID = n
+	}
+	return t, nil
+}
+
+// Tasks lists everything the comparison picker can offer: the tasks table rows
+// plus any task id that only ever shows up in the log. Most recent first.
+func (s *SQLite) Tasks(ctx context.Context) ([]TaskOption, error) {
+	query := `SELECT ids.id, ` + s.taskCol("description", "''") + `, ` + s.taskCol("status", "''") + `,
+	                 (SELECT COUNT(*) FROM reason_turns r WHERE r.task_id = ids.id),
+	                 (SELECT COALESCE(MAX(r.created_at), '') FROM reason_turns r WHERE r.task_id = ids.id)
+	          FROM (SELECT id FROM tasks UNION SELECT DISTINCT task_id FROM reason_turns WHERE task_id <> '') ids
+	          LEFT JOIN tasks t ON t.id = ids.id
+	          ORDER BY 5 DESC, 1 ASC`
+	if !s.hasTasksTable {
+		query = `SELECT task_id, '', '', COUNT(*), COALESCE(MAX(created_at), '')
+	          FROM reason_turns WHERE task_id <> ''
+	          GROUP BY task_id
+	          ORDER BY 5 DESC, 1 ASC`
+	}
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("store: list tasks: %w", err)
+	}
+	defer rows.Close()
+
+	options := []TaskOption{}
+	for rows.Next() {
+		var o TaskOption
+		if err := rows.Scan(&o.ID, &o.Description, &o.Status, &o.Turns, &o.LastAt); err != nil {
+			return nil, fmt.Errorf("store: scan task: %w", err)
+		}
+		options = append(options, o)
+	}
+	return options, rows.Err()
+}
+
+// TaskTurns returns a task's turns in execution order (oldest first), capped at
+// limit rows so one runaway task cannot make a comparison page unbounded.
+func (s *SQLite) TaskTurns(ctx context.Context, taskID string, limit int) ([]Turn, error) {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return []Turn{}, nil
+	}
+	if limit <= 0 || limit > TaskTurnsLimit {
+		limit = TaskTurnsLimit
+	}
+	query := "SELECT " + s.selectExpr() + fromClause + s.agentJoin() +
+		" WHERE " + s.column("task_id", "''") + " = ?" +
+		" ORDER BY r.created_at ASC, r.id ASC LIMIT ?"
+	rows, err := s.db.QueryContext(ctx, query, taskID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: list turns of task %s: %w", taskID, err)
+	}
+	defer rows.Close()
+
+	turns := []Turn{}
+	for rows.Next() {
+		t, err := scanTurn(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: scan turns of task %s: %w", taskID, err)
+		}
+		turns = append(turns, t)
+	}
+	return turns, rows.Err()
 }

@@ -1,0 +1,255 @@
+{{define "compare.gohtml"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>compare tasks · agent benchmark</title>
+<style>
+  :root { --line:#e2e5ea; --muted:#6b7280; --head:#f6f7f9; --accent:#1f6feb; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 24px 60px; font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; color:#111; background:#fff; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  h2.sect { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:22px 0 6px; }
+  h3 { font-size:14px; margin:0 0 6px; }
+  a { color:var(--accent); text-decoration:none; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:12px; word-break:break-all; }
+  .hint { color:var(--muted); font-size:11px; font-weight:400; text-transform:none; letter-spacing:0; }
+  .dim { color:var(--muted); }
+  .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+
+  form.picker { display:grid; grid-template-columns:1fr auto 1fr auto; gap:10px; align-items:end;
+                padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--head); }
+  .field { display:flex; flex-direction:column; gap:4px; min-width:0; }
+  .field label { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  select { width:100%; padding:5px 6px; border:1px solid var(--line); border-radius:5px; background:#fff; font:inherit; }
+  .swap a { display:inline-block; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; font-size:12px; color:#334155; white-space:nowrap; }
+  button { padding:6px 12px; border:1px solid var(--accent); border-radius:5px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  @media (max-width:820px) { form.picker { grid-template-columns:1fr; } }
+
+  .viewbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:14px 0 6px; font-size:12px; color:var(--muted); }
+  .viewbar .k { text-transform:uppercase; letter-spacing:.04em; font-size:11px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:6px; overflow:hidden; background:#fff; }
+  .seg a { padding:3px 10px; font-size:11px; text-decoration:none; color:#334155; }
+  .seg a + a { border-left:1px solid var(--line); }
+  .seg a.on { background:var(--accent); color:#fff; }
+  .warn { color:#92400e; background:#fef3c7; padding:2px 8px; border-radius:10px; }
+
+  .cmp { display:flex; flex-direction:column; gap:8px; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  .col { min-width:0; }
+  .card { border:1px solid var(--line); border-radius:8px; background:var(--head); padding:10px 12px; }
+  dl.meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:2px 14px; margin:0; padding:10px 12px;
+            border:1px solid var(--line); border-radius:8px; background:#fcfcfd; }
+  dl.meta div { display:flex; gap:8px; min-width:0; padding:2px 0; }
+  dl.meta dt { color:var(--muted); min-width:92px; flex:0 0 auto; }
+  dl.meta dd { margin:0; word-break:break-word; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; }
+  dl.meta.small dt, dl.meta.small dd { font-size:11.5px; }
+
+  /* output view toggle: raw_output <-> normalized_output, never both at once */
+  [data-out="raw"] [data-out="normalized"],
+  [data-out="normalized"] [data-out="raw"] { display:none; }
+
+  details.txt { border:1px solid var(--line); border-radius:8px; background:#fff; margin:6px 0 0; }
+  details.txt > summary { cursor:pointer; padding:6px 10px; font-size:11.5px; color:#334155; background:var(--head); border-radius:8px; }
+  details.txt[open] > summary { border-bottom:1px solid var(--line); border-radius:8px 8px 0 0; }
+  pre.box { margin:0; padding:10px 12px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+            white-space:pre-wrap; word-break:break-word; max-height:60vh; overflow:auto; }
+
+  /* execution table: A | step | B, aligned row by row */
+  .rows { display:flex; flex-direction:column; gap:10px; }
+  .erow { display:grid; grid-template-columns:1fr 76px 1fr; gap:12px; align-items:start; }
+  .erow.ehead { font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  .emid { text-align:center; font-size:11px; color:var(--muted); padding-top:8px; }
+  .emid .diff { display:block; margin-top:4px; }
+  .emid .diff i { display:inline-block; margin:1px; padding:0 5px; border-radius:9px; background:#fef3c7; color:#92400e; font-style:normal; font-size:10px; }
+  .ecol { min-width:0; border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; }
+  .ecol.empty { border-style:dashed; background:#fafbfc; color:var(--muted); text-align:center; font-size:12px; padding:14px 10px; }
+  .thead { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12px; }
+  .tmeta { display:flex; flex-wrap:wrap; gap:8px; color:var(--muted); font-size:11px; margin:2px 0 0; }
+  .tag { display:inline-block; padding:1px 6px; border-radius:10px; background:#eef2f7; font-size:11px; color:#334155; }
+  .tag.plan { background:#ede9fe; color:#5b21b6; }
+  .tag.agent { background:#dcfce7; color:#166534; }
+  .tag.error { background:#fee2e2; color:#991b1b; }
+  @media (max-width:900px) { .row2, .erow { grid-template-columns:1fr; } .emid { text-align:left; padding:0; } }
+</style>
+</head>
+<body data-out-view-root data-out="{{.OutView}}">
+<p><a href="/">« reason_turns 列表</a> · <a href="/api/compare?a={{.LeftID}}&amp;b={{.RightID}}">json</a></p>
+<h1>task 对比 <span class="hint">compare two runs · 左 = A · 右 = B</span></h1>
+<div class="sub">db: {{.DBPath}}</div>
+
+<form class="picker" method="get" action="/compare">
+  <div class="field">
+    <label for="a">task A（左）</label>
+    <select id="a" name="a">
+      <option value="">— 选择 task —</option>
+      {{range .Options}}<option value="{{.ID}}" {{if eq .ID $.LeftID}}selected{{end}}>{{.ID}} · {{.Turns}} turns{{if .Description}} · {{preview .Description 46}}{{end}}</option>{{end}}
+    </select>
+  </div>
+  <div class="field swap"><a href="{{.SwapURL}}" title="交换左右两侧">⇄ 交换</a></div>
+  <div class="field">
+    <label for="b">task B（右）</label>
+    <select id="b" name="b">
+      <option value="">— 选择 task —</option>
+      {{range .Options}}<option value="{{.ID}}" {{if eq .ID $.RightID}}selected{{end}}>{{.ID}} · {{.Turns}} turns{{if .Description}} · {{preview .Description 46}}{{end}}</option>{{end}}
+    </select>
+  </div>
+  <div class="field"><button type="submit">对比 compare</button></div>
+</form>
+
+<div class="viewbar">
+  <span class="k">output 视图</span>
+  <span class="seg">
+    <a href="{{.RawURL}}" data-out-link="raw" class="{{if eq .OutView "raw"}}on{{end}}">raw_output</a>
+    <a href="{{.NormURL}}" data-out-link="normalized" class="{{if eq .OutView "normalized"}}on{{end}}">normalized_output</a>
+  </span>
+  <span class="k">正文展开</span>
+  <span class="seg">
+    <a href="{{.OpenAll}}">全部展开</a><a href="{{.OpenNone}}">全部折叠</a>
+  </span>
+  {{if .SameTask}}<span class="warn">左右是同一个 task</span>{{end}}
+</div>
+{{if not .Both}}
+<p class="hint">选左边 A、右边 B 两个 task 后点「对比 compare」；也可以直接改地址栏：
+<span class="mono">/compare?a=task-13&amp;b=task-14</span></p>
+{{end}}
+
+<h2 class="sect">0 · 两个 run 的概览</h2>
+<div class="row2">
+  <div class="col">{{template "sideHead" .A}}</div>
+  <div class="col">{{template "sideHead" .B}}</div>
+</div>
+
+<h2 class="sect">1 · task 原始内容 <span class="hint">tasks 表（任务的原始定义）</span></h2>
+<div class="row2">
+  <div class="col">{{template "sideTask" .A}}</div>
+  <div class="col">{{template "sideTask" .B}}</div>
+</div>
+
+<h2 class="sect">2 · planner 入口 prompt <span class="hint">该 run 第一个 plan turn 的 input（含 task 定义与 Decision Cycle）</span></h2>
+<div class="row2">
+  <div class="col">{{template "turnMeta" (cell .A.Plan $.OpenSummary)}}{{template "turnInput" (cell .A.Plan $.OpenSummary)}}{{template "turnOutput" (cell .A.Plan $.OpenSummary)}}</div>
+  <div class="col">{{template "turnMeta" (cell .B.Plan $.OpenSummary)}}{{template "turnInput" (cell .B.Plan $.OpenSummary)}}{{template "turnOutput" (cell .B.Plan $.OpenSummary)}}</div>
+</div>
+
+<h2 class="sect">3 · 返回结果 <span class="hint">该 run 最后一个 turn 的输出</span></h2>
+<div class="row2">
+  <div class="col">{{template "turnMeta" (cell .A.Result $.OpenSummary)}}{{template "turnOutput" (cell .A.Result $.OpenSummary)}}</div>
+  <div class="col">{{template "turnMeta" (cell .B.Result $.OpenSummary)}}{{template "turnOutput" (cell .B.Result $.OpenSummary)}}</div>
+</div>
+
+<h2 class="sect">4 · 执行过程 · step by step <span class="hint">按执行顺序左右对齐，A 左 / B 右</span></h2>
+<div class="rows">
+  <div class="erow ehead">
+    <div>{{if .A.TaskID}}{{.A.TaskID}}{{else}}A{{end}}{{if .A.Capped}} (capped){{end}}</div>
+    <div class="emid">#</div>
+    <div>{{if .B.TaskID}}{{.B.TaskID}}{{else}}B{{end}}{{if .B.Capped}} (capped){{end}}</div>
+  </div>
+  {{range .Rows}}
+  <div class="erow">
+    <div class="ecol">{{template "turnCell" (cell .A $.OpenSteps)}}</div>
+    <div class="emid">{{.Index}}{{if .Diff}}<span class="diff">{{range .Diff}}<i>{{.}}</i>{{end}}</span>{{end}}</div>
+    <div class="ecol">{{template "turnCell" (cell .B $.OpenSteps)}}</div>
+  </div>
+  {{else}}
+  <p class="hint">选择两个 task 后，这里会按执行顺序左右对齐逐 turn 显示。</p>
+  {{end}}
+</div>
+
+
+<script>
+// Progressive enhancement: the raw_output / normalized_output toggle switches
+// every output pane on the page instantly; without JavaScript the plain links
+// reload the page with ?out=normalized.
+(function () {
+  var root = document.querySelector('[data-out-view-root]');
+  if (!root) return;
+  function apply(view) {
+    root.setAttribute('data-out', view);
+    document.querySelectorAll('a[data-out-link]').forEach(function (a) {
+      a.classList.toggle('on', a.getAttribute('data-out-link') === view);
+    });
+    var u = new URL(location.href);
+    if (view === 'normalized') u.searchParams.set('out', 'normalized');
+    else u.searchParams.delete('out');
+    history.replaceState(null, '', u);
+  }
+  document.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var a = t.closest('a[data-out-link]');
+    if (!a) return;
+    ev.preventDefault();
+    apply(a.getAttribute('data-out-link'));
+  });
+})();
+</script>
+</body>
+</html>
+{{end}}
+
+{{define "sideHead"}}{{if .Empty}}<div class="card">
+  <h3 class="dim">（未选择）</h3>
+  <p class="hint">在上面选一个 task 作为这一侧。</p>
+</div>{{else if .NotFound}}<div class="card">
+  <h3 class="dim mono">{{.TaskID}}</h3>
+  <p class="hint">找不到该 task：tasks 表与 reason_turns 里都没有它。</p>
+</div>{{else}}<div class="card">
+  <h3><a class="mono" href="{{.ListURL}}">{{.TaskID}}</a> {{if .HasTask}}<span class="tag">{{.Task.Status}}</span>{{end}}</h3>
+  <dl class="meta small">
+    <div><dt>turns</dt><dd>{{.TurnCount}}{{if .Capped}} (capped at 1000){{end}}</dd></div>
+    <div><dt>plan / agent</dt><dd>{{.PlanTurns}} / {{.AgentTurns}}{{if .OtherTurns}} / other {{.OtherTurns}}{{end}}</dd></div>
+    <div><dt>agents</dt><dd>{{range .Agents}}<span class="tag mono">{{.}}</span> {{end}}</dd></div>
+    <div><dt>tokens</dt><dd>{{num .TotalToken}}</dd></div>
+    <div><dt>duration</dt><dd>{{dur .TotalMS}}</dd></div>
+    {{if .HasCost}}<div><dt>cost_cents</dt><dd>{{printf "%.4f" .CostCents}}</dd></div>{{end}}
+    <div><dt>window</dt><dd>{{.StartedAt}} → {{.EndedAt}}</dd></div>
+    <div><dt>planner turn</dt><dd>{{if .Plan}}<a href="{{.PlanURL}}">#{{.Plan.ID}}</a> plan step {{.Plan.Step}}{{else}}<span class="dim">—</span>{{end}}</dd></div>
+    <div><dt>result turn</dt><dd>{{if .Result}}<a href="{{.ResultURL}}">#{{.Result.ID}}</a> {{.Result.Mode}} step {{.Result.Step}}{{else}}<span class="dim">—</span>{{end}}</dd></div>
+  </dl>
+  <p class="hint"><a href="{{.ListURL}}">在列表里只看该 task 的 turn ›</a></p>
+</div>{{end}}{{end}}
+
+{{define "sideTask"}}{{if .Empty}}<p class="hint">未选择 task。</p>
+{{else if .NotFound}}<p class="hint">找不到该 task。</p>
+{{else if .HasTask}}<dl class="meta">{{range .TaskFields}}<div><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>
+{{else}}<p class="hint">该库没有这个 task 的定义（没有 tasks 表，或 tasks 表里没有这一行）：原始内容以下面 planner 入口 prompt 里携带的 task 定义为准。</p>{{end}}{{end}}
+
+{{define "turnMeta"}}{{with .Turn}}
+<div class="thead">
+  <span class="tag {{if eq .Mode "plan"}}plan{{else if eq .Mode "agent"}}agent{{end}}">{{.Mode}}</span>
+  <a class="mono" href="{{.DetailURL}}">#{{.ID}}</a>
+  <span class="dim">step {{.Step}}</span>
+  <span class="mono">{{.Model}}</span>
+  <span class="tag{{if eq .Status "error"}} error{{end}}">{{.Status}}</span>
+</div>
+<div class="tmeta mono">
+  <span>{{dur .DurationMS}}</span><span>{{num .TotalTokens}} tok</span>
+  <span>agent {{.Agent}}</span><span>{{.CreatedAt}}</span>
+</div>
+{{else}}<p class="hint">— 该侧没有这个 turn</p>{{end}}{{end}}
+
+{{define "turnInput"}}{{with .Turn}}{{template "txt" (txtArgs "input" .Input $.Open)}}{{else}}<p class="hint">—</p>{{end}}{{end}}
+
+{{define "turnOutput"}}{{with .Turn}}{{template "outp" (outArgs .Output .NormalizedOutput $.Open)}}{{else}}<p class="hint">—</p>{{end}}{{end}}
+
+{{define "turnCell"}}{{with .Turn}}
+{{template "turnMeta" (cell . $.Open)}}
+{{template "turnInput" (cell . $.Open)}}
+{{template "turnOutput" (cell . $.Open)}}
+{{else}}<div class="empty">— 该侧没有这一步 —</div>{{end}}{{end}}
+
+{{define "txt"}}<details class="txt" {{if .Open}}open{{end}}>
+  <summary>{{if .Label}}{{.Label}} <span class="hint">{{.Chars}} chars</span>{{else}}text <span class="hint">{{.Chars}} chars</span>{{end}}</summary>
+  <pre class="box">{{if .Text}}{{.Text}}{{else}}（空）{{end}}</pre>
+</details>{{end}}
+
+{{define "outp"}}<details class="txt" {{if .Open}}open{{end}}>
+  <summary>output
+    <span class="hint" data-out="raw">raw {{.Chars}} chars</span>
+    <span class="hint" data-out="normalized">normalized {{.NormChars}} chars</span>
+  </summary>
+  <pre class="box" data-out="raw">{{if .Raw}}{{.Raw}}{{else}}（空）{{end}}</pre>
+  <pre class="box" data-out="normalized">{{if .Normalized}}{{.Normalized}}{{else}}（该 turn 没有 normalized_output）{{end}}</pre>
+</details>{{end}}
+

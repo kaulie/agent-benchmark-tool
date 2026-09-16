@@ -33,10 +33,40 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
   带 **output 视图开关**：切换 `raw_output` ⇄ `normalized_output`（同一时刻只显示一个，不再同时铺开），
   切换是纯前端即时生效（URL 同步为 `?out=normalized`，可分享/刷新保持）；关闭 JS 时退化为普通链接跳转；
   某条没有归一化输出时该栏提示而不是空白
+- **task 对比**（左右分布，见下）：`/compare?a={task_id}&b={task_id}`
 - JSON 列表：`/api/reason-turns`
 - JSON 单条：`/api/reason-turns/{id}`
 - 过滤选项（facets）：`/api/facets`
+- 可对比的 task 列表：`/api/tasks`
+- JSON 对比：`/api/compare?a={task_id}&b={task_id}`
 - 健康检查：`/healthz`
+
+### task 对比（compare two tasks）
+
+同一个 task 描述会有多次 run（重跑、换 model、改 prompt），`/compare` 用来把**两个 task 的执行过程**
+左右摆在一起看：
+
+- 入口：列表页顶部「⇄ task 对比」，列表里点 `task_id`（带下划虚线的那个），或任意详情页的「⇄ 对比这个 task」
+- 选择：页面顶部两个下拉（`task A` 左 / `task B` 右）+「对比 compare」，`⇄ 交换` 一秒换左右
+- 页面结构（左右两列，A 一律在左、B 一律在右）：
+  1. **概览**：turn 数（plan / agent 拆分）、agent、tokens、耗时、成本、时间窗、planner turn 与 result turn
+  2. **task 原始内容**：`tasks` 表里该 task 的定义（description / domain / status / agent_id / 时间戳…）
+  3. **planner 入口 prompt**：该 run **第一个 plan turn 的 input**（bootstrap prompt + task 定义 + Decision Cycle），
+     以及该 plan turn 的输出
+  4. **返回结果**：该 run **最后一个 turn 的输出**（raw_output，可切 normalized_output）
+  5. **执行过程 · step by step**：按执行顺序（`created_at, id`）**逐 turn 左右对齐**——
+     A 的第 1 步对 B 的第 1 步，即使两侧 step 编号不同；中间一列标出该步在两侧**不一样的字段**
+     （`mode` / `model` / `status` / `tokens` / `duration`，差 1.5 倍以上才标记），少 turn 的一侧显示「该侧没有这一步」而不是错位
+- 正文默认：三个关键内容展开、每步正文折叠；工具条的「全部展开 / 全部折叠」用 `?open=all|none` 表达（可分享、刷新保持）
+- output 视图：整个页面共用一个 `raw_output` ⇄ `normalized_output` 开关（`?out=normalized`），切换即时生效、URL 同步
+- 数据来源：execution 来自 `reason_turns`（按 `task_id` 取全量，顺序 `created_at ASC, id ASC`，单侧上限 1000 turn）；
+  task 原始内容来自 `tasks` 表。**库里没有 `tasks` 表时不会报错**：该栏提示「原始内容见 planner 入口 prompt」，
+  其余照常对比
+- 未选/选错都能用：只选一侧、选到不存在的 task（页面内联提示）、两侧选同一个 task（顶部黄条提醒）都不会 500
+
+`GET /api/compare?a=…&b=…` 返回同一份数据（`a` / `b` 各含 `task` / `planner_turn` / `result_turn` / `turns` /
+`summary`，外加按位置对齐的 `aligned` 行与 `diff`），`GET /api/tasks` 返回选择器里的 task 候选
+（`tasks` 表行 ∪ 日志里出现过的 task_id，各带 turn 数与最近活动时间）。
 
 ### 配置
 
@@ -59,7 +89,21 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 | `order` | `id`（默认）/ `created_at` / `duration_ms` / `total_tokens` |
 | `dir` | `desc`（默认）/ `asc` |
 | `preview` `truncate` | `preview=1` 时把 input/output 截断为 `truncate` 个字符（默认 400），便于列表消费 |
-| `out` | **仅影响详情页 `/turns/{id}` 的 HTML**：`out=normalized` 让 output 栏显示 `normalized_output`（默认 `raw`）。列表页不渲染正文，JSON 接口始终同时返回两个字段 |
+| `out` | **仅影响 HTML**：`out=normalized` 让 output 栏显示 `normalized_output`（默认 `raw`）；作用于详情页 `/turns/{id}` 与对比页 `/compare`。列表页不渲染正文，JSON 接口始终同时返回两个字段 |
+
+`GET /compare`
+
+| 参数 | 说明 |
+|------|------|
+| `a` `b` | 左右两侧的 task_id（`/api/tasks` 给出的值）。都可省略：只选一侧时另一侧留空提示 |
+| `out` | `raw`（默认）/ `normalized`，控制页面上所有 output 栏显示哪一个 |
+| `open` | `all` 全部展开 / `none` 全部折叠（默认：关键内容展开、逐 turn 正文折叠） |
+
+`GET /api/compare?a={task_id}&b={task_id}` 返回左右两侧的 task 定义、planner 入口 turn、最后一个 turn（结果）、
+该 task 的全部 turn 与汇总（turn 数 / tokens / 耗时 / 成本 / agent），以及按执行位置对齐的 `aligned` 行。
+
+`GET /api/tasks` 返回可对比的 task 候选：`tasks` 表行 ∪ 日志里出现过的 `task_id`，各带 turn 数与最近活动时间，
+并用 `tasks_table` 说明该库是否有 `tasks` 表。
 
 返回：
 
@@ -96,8 +140,8 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 其余字段（provider / status / tokens / 耗时 / 成本）先一并带出，供第二、三阶段做
 行为标记与 model 对比分析，无需再改 schema。
 
-兼容旧库：若 `reason_turns` 只有旧的 `output` 列（无 `raw_output`），或没有 `agents` 表、
-`agent_id` 为 TEXT，服务会自动降级读取而不会报错。
+兼容旧库：若 `reason_turns` 只有旧的 `output` 列（无 `raw_output`），或没有 `agents` / `tasks` 表、
+`agent_id` 为 TEXT，服务会自动降级读取而不会报错（没有 `tasks` 表时对比页只是不显示 task 定义）。
 
 ### 开发
 
@@ -114,6 +158,8 @@ go vet ./...
 | 领域模型、分页/过滤选项 | `internal/store/model.go` |
 | 只读 SQLite 访问、方言与列探测 | `internal/store/sqlite.go` |
 | HTTP 路由、JSON 接口、HTML 页面 | `internal/httpapi/server.go`、`internal/httpapi/pages.go` |
+| task 对比（取数、对齐、JSON） | `internal/httpapi/compare.go` |
+| 页面模板 | `internal/httpapi/templates/*.gohtml`（`compare.gohtml` = 对比页） |
 | 页面模板 | `internal/httpapi/templates/*.gohtml` |
 
 ## 部署（agent-control-plane-deployment 规范）
