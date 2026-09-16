@@ -226,12 +226,26 @@ func (s *SQLite) agentName() string {
 	return "COALESCE(a.name, '')"
 }
 
+// cycleExpr is the turn's cycle number. Current databases call that column
+// cycle; legacy ones call it step — autonomy renamed reason_turns.step → cycle
+// in place, so both hold the same number and both names have to be readable. A
+// database with neither reads as the fallback.
+func (s *SQLite) cycleExpr(fallback string) string {
+	switch {
+	case s.has["cycle"]:
+		return "r.cycle"
+	case s.has["step"]:
+		return "r.step"
+	}
+	return fallback
+}
+
 // selectExpr is the projection shared by every read query.
 func (s *SQLite) selectExpr() string {
 	exprs := []string{
 		s.column("id", "0"),
 		s.textColumn("task_id"),
-		s.column("step", "0"),
+		s.cycleExpr("0"),
 		s.textColumn("mode"),
 		s.textColumn("agent_id"),
 		s.agentName(),
