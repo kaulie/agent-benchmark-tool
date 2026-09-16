@@ -143,6 +143,9 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 兼容旧库：若 `reason_turns` 只有旧的 `output` 列（无 `raw_output`），或没有 `agents` / `tasks` 表、
 `agent_id` 为 TEXT，服务会自动降级读取而不会报错（没有 `tasks` 表时对比页只是不显示 task 定义）。
 
+`step` 同理：autonomy 已原地把 `reason_turns.step` 改名为 `cycle`，两者存的是同一个数，
+服务优先读 `cycle`、其次回退 `step`（都没有则读作 0）；对外字段名仍叫 `step`，UI / JSON / 模板不变。
+
 ### 开发
 
 ```bash
