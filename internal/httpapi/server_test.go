@@ -26,7 +26,7 @@ CREATE TABLE reason_turns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id TEXT NOT NULL DEFAULT '',
   agent_id INTEGER NOT NULL DEFAULT 0,
-  step INTEGER NOT NULL DEFAULT 0,
+  cycle INTEGER NOT NULL DEFAULT 0,
   mode TEXT NOT NULL DEFAULT '',
   llm_provider TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
@@ -75,7 +75,7 @@ var fixtureSeeds = []string{
 	`INSERT INTO agents (id, name, llm_provider, model) VALUES
 	   (1, 'agent-0001', 'cursor', 'composer-2.5'),
 	   (2, 'agent-0002', 'cline', 'deepseek-v4-pro')`,
-	`INSERT INTO reason_turns (task_id, agent_id, step, mode, llm_provider, model, input, raw_output,
+	`INSERT INTO reason_turns (task_id, agent_id, cycle, mode, llm_provider, model, input, raw_output,
 	   normalized_output, run_id, status, duration_ms, total_tokens, cost_cents, created_at) VALUES
 	   ('task-1', 1, 1, 'plan', 'cursor', 'composer-2.5', '<script>alert(1)</script> PLAN PROMPT',
 	    'raw plan output', '{"type":"plan"}', 'run-a', 'finished', 1200, 4200, 1.25, '2026-09-14T10:00:00Z'),
@@ -181,6 +181,10 @@ func TestListJSONShape(t *testing.T) {
 	if first.TaskID != "task-2" || first.Agent != "agent-0002" || first.Mode != "plan" ||
 		first.Model != "deepseek-v4-pro" || first.Output != "plan two" {
 		t.Fatalf("unexpected first turn: %+v", first)
+	}
+	// The cycle number comes from the cycle column (autonomy's renamed step).
+	if first.Step != 1 {
+		t.Fatalf("first turn step=%d, want 1 read from the cycle column", first.Step)
 	}
 	if got.Filters.Dir != "desc" {
 		t.Fatalf("filters.dir=%q", got.Filters.Dir)

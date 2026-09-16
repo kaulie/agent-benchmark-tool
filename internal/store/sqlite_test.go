@@ -11,6 +11,8 @@ import (
 )
 
 // currentSchema mirrors the reason_turns/agents columns the store reads.
+// Current databases name the cycle column cycle (autonomy renamed the old step
+// in place); the legacy step spelling is covered by the legacy fixtures below.
 const currentSchema = `
 CREATE TABLE agents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -23,7 +25,7 @@ CREATE TABLE reason_turns (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id TEXT NOT NULL DEFAULT '',
   agent_id INTEGER NOT NULL DEFAULT 0,
-  step INTEGER NOT NULL DEFAULT 0,
+  cycle INTEGER NOT NULL DEFAULT 0,
   mode TEXT NOT NULL DEFAULT '',
   llm_provider TEXT NOT NULL DEFAULT '',
   model TEXT NOT NULL DEFAULT '',
@@ -94,7 +96,7 @@ const (
 	   (1, 'agent-0001', 'deleted', 'cursor', 'composer-2.5'),
 	   (2, 'agent-0002', 'running', 'cline', 'deepseek-v4-pro')`
 
-	seedTurnRows = `INSERT INTO reason_turns (task_id, agent_id, step, mode, llm_provider, model, input, raw_output,
+	seedTurnRows = `INSERT INTO reason_turns (task_id, agent_id, cycle, mode, llm_provider, model, input, raw_output,
 	   normalized_output, run_id, status, duration_ms, total_tokens, cost_cents, created_at) VALUES
 	   ('task-1', 1, 1, 'plan', 'cursor', 'composer-2.5', 'PLAN PROMPT ONE', 'FENCED {json} plan',
 	    '{"type":"plan"}', 'run-a', 'finished', 1200, 4200, 1.25, '2026-09-14T10:00:00Z'),
@@ -329,8 +331,69 @@ CREATE TABLE reason_turns (
 	if got.Output != "legacy raw output" {
 		t.Fatalf("output=%q, want legacy column value", got.Output)
 	}
+	if got.Step != 1 {
+		t.Fatalf("step=%d, want the legacy step column read as the cycle number", got.Step)
+	}
 	if got.Mode != "" || got.Agent != "" || got.Status != "" {
 		t.Fatalf("missing columns should read as empty: %+v", got)
+	}
+}
+
+// autonomy renamed reason_turns.step → cycle in place, so the current schema
+// must read the new name — probing only step would silently report 0 forever.
+func TestCycleColumnIsReadAsStep(t *testing.T) {
+	s, err := OpenReadOnly(seedTurns(t))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	if got := s.cycleExpr("0"); got != "r.cycle" {
+		t.Fatalf("cycleExpr=%q, want r.cycle for a cycle-column database", got)
+	}
+
+	page, err := s.List(context.Background(), ListOptions{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	byMode := map[string]int64{}
+	for _, t2 := range page.Turns {
+		byMode[t2.Mode] = t2.Step
+	}
+	if byMode["plan"] != 1 || byMode["agent"] != 0 {
+		t.Fatalf("steps=%v, want plan→1 agent→0 read from cycle", byMode)
+	}
+}
+
+// A database with neither spelling still reads: the turn's cycle is the
+// fallback, not a query error.
+func TestTurnWithoutCycleOrStepReadsAsZero(t *testing.T) {
+	path := newFixtureDB(t, `
+CREATE TABLE reason_turns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL DEFAULT '',
+  input TEXT NOT NULL DEFAULT '',
+  raw_output TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);`,
+		`INSERT INTO reason_turns (task_id, input, raw_output, created_at)
+		 VALUES ('t-nocycle', 'in', 'out', '2026-01-01T00:00:00Z')`)
+
+	s, err := OpenReadOnly(path)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer s.Close()
+
+	if got := s.cycleExpr("0"); got != "0" {
+		t.Fatalf("cycleExpr=%q, want the fallback", got)
+	}
+	page, err := s.List(context.Background(), ListOptions{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if page.Total != 1 || page.Turns[0].Step != 0 {
+		t.Fatalf("total=%d step=%d, want 1 row with step 0", page.Total, page.Turns[0].Step)
 	}
 }
 
