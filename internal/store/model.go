@@ -130,8 +130,45 @@ type FacetValue struct {
 	Count int    `json:"count"`
 }
 
+// TaskInfo is a task's own definition: the "original content" a run started
+// from. It is read from the optional tasks table; databases that only carry the
+// reason_turns log simply have no TaskInfo (see SQLite.HasTasks).
+type TaskInfo struct {
+	ID            string `json:"id"`
+	Description   string `json:"description"`
+	Domain        string `json:"domain"`
+	Context       string `json:"context"`
+	Target        string `json:"target"`
+	Goal          string `json:"goal"`
+	ExpectedState string `json:"expected_state"`
+	Status        string `json:"status"`
+	AgentID       int64  `json:"agent_id"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+// TaskOption is one selectable task in the comparison picker: the tasks table
+// row (when present) joined with how much execution the log holds for it.
+type TaskOption struct {
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	// Turns is the number of reason_turns rows recorded for this task.
+	Turns int `json:"turns"`
+	// LastAt is the created_at of the task's most recent turn.
+	LastAt string `json:"last_at"`
+}
+
+// TaskTurnsLimit caps how many turns one side of a comparison reads, so a
+// runaway task cannot make the page unbounded.
+const TaskTurnsLimit = 1000
+
 // ErrNotFound is returned when a turn id does not exist.
 var ErrNotFound = fmt.Errorf("turn not found")
+
+// ErrTaskNotFound is returned when neither the tasks table nor the log knows
+// the requested task id.
+var ErrTaskNotFound = fmt.Errorf("task not found")
 
 // Preview shortens s to at most n runes for list rendering.
 func Preview(s string, n int) string {

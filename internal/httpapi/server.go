@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kaulie/agent-benchmark-tool/internal/store"
 )
@@ -29,6 +30,11 @@ type TurnReader interface {
 	Facets(ctx context.Context) (store.Facets, error)
 	CountAll(ctx context.Context) (int, error)
 	Path() string
+
+	// Task definitions and per-task execution, used by the comparison page.
+	Tasks(ctx context.Context) ([]store.TaskOption, error)
+	Task(ctx context.Context, id string) (store.TaskInfo, error)
+	TaskTurns(ctx context.Context, taskID string, limit int) ([]store.Turn, error)
 }
 
 // Server renders reason_turns as JSON and HTML.
@@ -63,6 +69,57 @@ func New(st TurnReader) (*Server, error) {
 			}
 			return strconv.FormatFloat(*f, 'f', 4, 64)
 		},
+		// num groups an integer with thousands separators (token counts).
+		"num": func(n int64) string {
+			s := strconv.FormatInt(n, 10)
+			neg := strings.HasPrefix(s, "-")
+			if neg {
+				s = s[1:]
+			}
+			var b strings.Builder
+			for i, r := range s {
+				if i > 0 && (len(s)-i)%3 == 0 {
+					b.WriteByte(',')
+				}
+				b.WriteRune(r)
+			}
+			if neg {
+				return "-" + b.String()
+			}
+			return b.String()
+		},
+		// dur renders a millisecond duration for human reading.
+		"dur": func(ms int64) string {
+			d := time.Duration(ms) * time.Millisecond
+			switch {
+			case ms <= 0:
+				return "0s"
+			case d < time.Minute:
+				return strconv.FormatFloat(d.Seconds(), 'f', 1, 64) + "s"
+			default:
+				return strconv.Itoa(int(d/time.Minute)) + "m" +
+					strconv.FormatFloat((d%time.Minute).Seconds(), 'f', 0, 64) + "s"
+			}
+		},
+		// preview shortens a one-line label (task description) for <option>s.
+		"preview": store.Preview,
+		// cell/txtArgs/outArgs hand the comparison templates their arguments: a
+		// turn plus the page's expand state, and the raw/normalized text pair.
+		"cell": func(turn *compareTurn, open bool) cellArgs {
+			return cellArgs{Turn: turn, Open: open}
+		},
+		"txtArgs": func(label, text string, open bool) textArgs {
+			return textArgs{Label: label, Text: text, Chars: len([]rune(text)), Open: open}
+		},
+		"outArgs": func(raw, normalized string, open bool) outArgs {
+			return outArgs{
+				Raw:        raw,
+				Normalized: normalized,
+				Chars:      len([]rune(raw)),
+				NormChars:  len([]rune(normalized)),
+				Open:       open,
+			}
+		},
 	}
 	tmpl, err := template.New("").Funcs(funcs).ParseFS(templatesFS, "templates/*.gohtml")
 	if err != nil {
@@ -76,9 +133,13 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleListPage)
 	mux.HandleFunc("GET /turns/{id}", s.handleDetailPage)
+	// Side-by-side comparison of two tasks' executions.
+	mux.HandleFunc("GET /compare", s.handleComparePage)
 	mux.HandleFunc("GET /api/reason-turns", s.handleListJSON)
 	mux.HandleFunc("GET /api/reason-turns/{id}", s.handleDetailJSON)
 	mux.HandleFunc("GET /api/facets", s.handleFacetsJSON)
+	mux.HandleFunc("GET /api/tasks", s.handleTasksJSON)
+	mux.HandleFunc("GET /api/compare", s.handleCompareJSON)
 	// /health is the path the deployment platform probes for every service;
 	// /healthz is kept as an alias for manual use.
 	mux.HandleFunc("GET /health", s.handleHealth)

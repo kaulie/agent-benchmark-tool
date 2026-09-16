@@ -11,6 +11,8 @@
          color:#111; background:#fff; }
   h1 { font-size:18px; margin:0 0 4px; }
   .sub { color:var(--muted); font-size:12px; margin-bottom:14px; word-break:break-all; }
+  .compare-entry { margin:0 0 12px; font-size:12px; }
+  .compare-entry a { display:inline-block; padding:4px 10px; border:1px solid var(--line); border-radius:6px; background:var(--head); }
   form.filters { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px 12px;
                  align-items:end; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--head); }
   .field { display:flex; flex-direction:column; gap:4px; min-width:0; }
@@ -42,6 +44,8 @@
   .tag.agent { background:#dcfce7; color:#166534; }
   .tag.norm { background:#e0f2fe; color:#075985; }
   .dash { color:var(--muted); }
+  td .task-link { color:#334155; border-bottom:1px dotted var(--muted); }
+  td .task-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
   td.open a { color:var(--accent); text-decoration:none; }
   .empty { padding:24px; text-align:center; color:var(--muted); }
 </style>
@@ -49,6 +53,8 @@
 <body>
 <h1>reason_turns</h1>
 <div class="sub">db: {{.DBPath}} · {{.Total}} matching turns · page {{.PageNumber}} (showing {{.Shown}})</div>
+
+<p class="compare-entry"><a href="/compare">⇄ task 对比：选两个 task，左右对比它们的执行过程</a></p>
 
 <form class="filters" method="get" action="/">
   <div class="field">
@@ -146,7 +152,7 @@
   {{range .Rows}}
     <tr class="turn" data-turn="{{.ID}}" data-href="{{.DetailURL}}">
       <td><a class="turn-id" href="{{.DetailURL}}">#{{.ID}}</a></td>
-      <td class="mono">{{.TaskID}}</td>
+      <td class="mono">{{if .TaskID}}<a class="task-link" href="/compare?a={{.TaskID}}" title="对比这个 task 的执行过程">{{.TaskID}}</a>{{end}}</td>
       <td class="mono">{{.Agent}}</td>
       <td><span class="tag {{if eq .Mode "plan"}}plan{{else if eq .Mode "agent"}}agent{{end}}">{{.Mode}}</span></td>
       <td class="mono">{{.Model}}</td>
