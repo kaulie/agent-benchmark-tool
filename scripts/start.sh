@@ -3,7 +3,8 @@
 # 启动 agent-benchmark-tool —— 遵循「agent-control-plane-deployment」部署系统规范。
 #
 # 由控制面以 restartCmd 调用：cwd = runtimeDir，且注入
-#   PORT        = 服务契约 healthUrl 里的端口（本脚本据此绑定监听地址）
+#   PORT        = 服务契约 healthUrl 里的端口（本脚本据此绑定监听地址；
+#                 显式设置的 SERVICE_PORT 优先于它，都没有就用 4231）
 #   RUNTIME_DIR = runtimeDir
 #   APP_VERSION = 本次部署的 8 位短 hash
 #
@@ -20,7 +21,10 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME_DIR="${RUNTIME_DIR:-$(cd "${DIR}/.." && pwd)}"
-PORT="${PORT:-4231}"
+# 端口优先级：显式设置的 SERVICE_PORT（本服务专用）> 平台按服务契约注入的 PORT > 默认 4231。
+# SERVICE_PORT 排在 PORT 前面，是因为交互式 shell 里常残留**别的服务**的 PORT（网关/预览
+# 服务等）；那种值属于别人，不该把这个服务钉到它的端口上。下面还有占用守卫兜底。
+PORT="${SERVICE_PORT:-${PORT:-4231}}"
 APP_VERSION="${APP_VERSION:-dev}"
 
 BIN="${RUNTIME_DIR}/bin/benchmarkd"
@@ -67,6 +71,18 @@ if [ -f "${PID_FILE}" ]; then
     exit 0
   fi
   rm -f "${PID_FILE}"
+fi
+
+# 端口占用守卫：交互式 shell 里若恰好导出了**别的服务**的 PORT（例如网关自己的
+# 4211），端口链会把它当成注入值。此时若照常启动，本服务会绑到 127.0.0.1:PORT 上，
+# 把那个服务在回环地址上“盖”掉而两边都不报错——所以这里直接拒绝启动。
+# 平台部署路径不受影响：restartCmd 会先 stop，端口是空的；真被占用时也应该响亮地失败。
+if command -v lsof >/dev/null 2>&1; then
+  holder="$(lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN -t 2>/dev/null | head -1 || true)"
+  if [ -n "${holder}" ]; then
+    die "端口 ${PORT} 已被 pid=${holder} 占用：$(ps -o command= -p "${holder}" 2>/dev/null | head -c 160)
+      请显式指定端口（PORT=… 或 SERVICE_PORT=…），或先停掉占用者"
+  fi
 fi
 
 log "启动 部署版本=${APP_VERSION} 监听=${ADDR} 数据源=${AUTONOMY_DB}(只读)"
