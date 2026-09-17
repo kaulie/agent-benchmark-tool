@@ -73,9 +73,17 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 | 环境变量 | 含义 | 默认 |
 |----------|------|------|
 | `AUTONOMY_DB` | 要读取的 SQLite 库路径 | `~/Projects/autonomy/data/autonomy.db` |
-| `BENCHMARK_ADDR` | 监听地址 | `127.0.0.1:4231` |
+| `SERVICE_PORT` | 启动端口：只给端口号（`8080`，仍是 127.0.0.1）或给完整 `host:port` | `4231` |
+| `BENCHMARK_ADDR` | 监听地址（完整地址，优先级高于 `SERVICE_PORT`） | `127.0.0.1:4231` |
 
-命令行 `-db` / `-addr` 优先级最高。服务**不读取**环境里的 `HOST` / `PORT`（那是别的服务用的）。
+优先级：`-db` / `-addr` 命令行 > `BENCHMARK_ADDR` > `SERVICE_PORT` > 默认 `127.0.0.1:4231`。
+`SERVICE_PORT` 读不到（未设置/空/不是合法端口，如 `abc`、`0`、`70000`）时**不报错**，退回默认端口，
+只在日志里提示一行 `ignoring SERVICE_PORT=...`。服务**不读取**环境里的 `HOST` / `PORT`（那是别的服务用的）。
+
+```bash
+SERVICE_PORT=8080 go run ./cmd/benchmarkd        # → http://127.0.0.1:8080/
+SERVICE_PORT=8080 bash scripts/start.sh          # 部署脚本同理：SERVICE_PORT > 平台注入的 PORT > 4231
+```
 
 ### 接口
 
@@ -190,6 +198,8 @@ make runtime-check  # 在临时 runtime 目录跑一遍 start → /health → st
 
 启动时平台注入 `PORT`（来自服务契约 healthUrl）、`RUNTIME_DIR`、`APP_VERSION`；
 服务固定监听 `127.0.0.1:${PORT}`，平台统一探活 `GET /health`。
+端口优先级：`SERVICE_PORT`（显式指定，优先）> `PORT`（平台注入）> `4231`；
+若目标端口已被别的进程监听，`start.sh` **拒绝启动**并打印占用者，避免把别的服务在回环地址上“盖”掉。
 
 ### 触发部署
 
