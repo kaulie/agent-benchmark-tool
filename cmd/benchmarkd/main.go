@@ -5,6 +5,7 @@
 //
 //	go run ./cmd/benchmarkd
 //	go run ./cmd/benchmarkd -db /path/to/autonomy.db -addr 127.0.0.1:4231
+//	SERVICE_PORT=8080 go run ./cmd/benchmarkd
 package main
 
 import (
@@ -18,6 +19,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,14 +40,43 @@ func defaultDBPath() string {
 	return filepath.Join(home, "Projects", "autonomy", "data", "autonomy.db")
 }
 
-// defaultAddr is the listen address. It deliberately ignores the ambient
-// HOST/PORT variables (a shared shell may set PORT for a different service);
-// use BENCHMARK_ADDR or -addr to override.
-func defaultAddr() string {
-	if v := os.Getenv("BENCHMARK_ADDR"); v != "" {
+// defaultListenAddr is the built-in listen address (loopback only: the tool
+// reads a local log and has no auth).
+const defaultListenAddr = "127.0.0.1:4231"
+
+// defaultAddr is the listen address from the environment, or the default.
+func defaultAddr() string { return resolveAddr(os.Getenv) }
+
+// resolveAddr picks the listen address from getenv, most specific first:
+//
+//	BENCHMARK_ADDR  full listen address — this service's own override
+//	SERVICE_PORT    the deployment port: a bare port ("8080") or a full
+//	                "host:port"; a bare port still stays on loopback
+//
+// Anything else falls back to defaultListenAddr. The ambient HOST/PORT variables
+// are ignored on purpose: a shared shell may set PORT for a different service.
+// An unusable SERVICE_PORT is not fatal — the service falls back to the default
+// instead of refusing to start. The getenv indirection keeps the precedence
+// testable.
+func resolveAddr(getenv func(string) string) string {
+	if v := strings.TrimSpace(getenv("BENCHMARK_ADDR")); v != "" {
 		return v
 	}
-	return "127.0.0.1:4231"
+	if v := strings.TrimSpace(getenv("SERVICE_PORT")); v != "" {
+		// A full host:port is accepted too, but a missing host stays loopback:
+		// ":8080" must not silently expose the log on every interface.
+		if host, port, err := net.SplitHostPort(v); err == nil && port != "" {
+			if host == "" {
+				host = "127.0.0.1"
+			}
+			return net.JoinHostPort(host, port)
+		}
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 65535 {
+			return net.JoinHostPort("127.0.0.1", v)
+		}
+		log.Printf("ignoring SERVICE_PORT=%q: not a port, using %s", v, defaultListenAddr)
+	}
+	return defaultListenAddr
 }
 
 // version is stamped at build time via -ldflags "-X main.version=<hash>".
