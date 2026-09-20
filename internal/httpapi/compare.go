@@ -111,7 +111,8 @@ type compareRow struct {
 
 // compareView is the model for the comparison page.
 type compareView struct {
-	DBPath  string
+	// Source is the data source the page was rendered from (the autonomy API).
+	Source  string
 	Options []store.TaskOption
 
 	LeftID   string
@@ -141,7 +142,7 @@ type compareView struct {
 func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 	view, err := s.buildCompare(r)
 	if err != nil {
-		s.fail(w, err)
+		s.sourceError(w, err)
 		return
 	}
 	s.render(w, http.StatusOK, "compare.gohtml", view)
@@ -222,7 +223,7 @@ func (s *Server) handleTasksJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"tasks":       tasks,
-		"tasks_table": s.hasTasksTable(),
+		"tasks_table": s.store.HasTasks(),
 	})
 }
 
@@ -290,7 +291,7 @@ func (s *Server) buildCompare(r *http.Request) (compareView, error) {
 	}
 
 	view := compareView{
-		DBPath:      s.store.Path(),
+		Source:      s.store.Path(),
 		Options:     options,
 		LeftID:      leftID,
 		RightID:     rightID,
@@ -422,7 +423,9 @@ func newCompareTurn(t store.Turn) compareTurn {
 }
 
 // taskFields renders the task definition as label/value rows, keeping only the
-// fields the database actually filled in.
+// fields the upstream actually filled in. The columns are the ones autonomy's
+// TaskProgress carries; the task's error (why a run is blocked) is shortened so
+// one long reason cannot push the rest of the page off screen.
 func taskFields(task store.TaskInfo, has bool) []field {
 	if !has {
 		return nil
@@ -435,11 +438,10 @@ func taskFields(task store.TaskInfo, has bool) []field {
 		{"id", task.ID},
 		{"description", task.Description},
 		{"domain", task.Domain},
-		{"context", task.Context},
-		{"target", task.Target},
-		{"goal", task.Goal},
-		{"expected_state", task.ExpectedState},
+		{"goal_type", task.GoalType},
+		{"context_ref", task.ContextRef},
 		{"status", task.Status},
+		{"error", store.Preview(strings.Join(strings.Fields(task.Error), " "), 320)},
 		{"agent_id", agent},
 		{"created_at", task.CreatedAt},
 		{"updated_at", task.UpdatedAt},
@@ -526,12 +528,4 @@ func appendUnique(list []string, value string) []string {
 		}
 	}
 	return append(list, value)
-}
-
-// hasTasksTable reports whether the store exposes task definitions.
-func (s *Server) hasTasksTable() bool {
-	if h, ok := s.store.(interface{ HasTasks() bool }); ok {
-		return h.HasTasks()
-	}
-	return false
 }

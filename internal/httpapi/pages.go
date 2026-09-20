@@ -37,7 +37,7 @@ type rowView struct {
 
 // listView is the model for the list page.
 type listView struct {
-	DBPath     string
+	Source     string
 	Total      int
 	Limit      int
 	Offset     int
@@ -60,7 +60,7 @@ type listView struct {
 
 // detailView is the model for the single-turn page.
 type detailView struct {
-	DBPath        string
+	Source        string
 	Turn          store.Turn
 	InputLen      int
 	OutputLen     int
@@ -80,18 +80,18 @@ func (s *Server) handleListPage(w http.ResponseWriter, r *http.Request) {
 	req := parseListRequest(r.URL.Query())
 	page, err := s.store.List(r.Context(), req.opts)
 	if err != nil {
-		s.fail(w, err)
+		s.sourceError(w, err)
 		return
 	}
 	facets, err := s.store.Facets(r.Context())
 	if err != nil {
-		s.fail(w, err)
+		s.sourceError(w, err)
 		return
 	}
 
 	base := listQuery(req.opts)
 	view := listView{
-		DBPath:     s.store.Path(),
+		Source:     s.store.Path(),
 		Total:      page.Total,
 		Limit:      page.Limit,
 		Offset:     page.Offset,
@@ -143,11 +143,11 @@ func (s *Server) handleDetailPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		s.fail(w, err)
+		s.sourceError(w, err)
 		return
 	}
 	view := detailView{
-		DBPath:        s.store.Path(),
+		Source:        s.store.Path(),
 		Turn:          turn,
 		InputLen:      len([]rune(turn.Input)),
 		OutputLen:     len([]rune(turn.Output)),

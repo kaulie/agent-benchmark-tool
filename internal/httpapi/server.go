@@ -22,19 +22,29 @@ import (
 //go:embed templates/*.gohtml
 var templatesFS embed.FS
 
-// TurnReader is the read-only data access the API needs. *store.SQLite
-// implements it; tests can supply a fixture.
+// TurnReader is the read-only data access the API needs. *autonomyapi.Client
+// implements it over HTTP; tests can supply a fixture.
 type TurnReader interface {
 	List(ctx context.Context, opts store.ListOptions) (store.Page, error)
 	Get(ctx context.Context, id int64) (store.Turn, error)
 	Facets(ctx context.Context) (store.Facets, error)
 	CountAll(ctx context.Context) (int, error)
+	// Path identifies the data source, for the page headers and /health.
 	Path() string
+	// HasTasks reports whether the source carries task definitions.
+	HasTasks() bool
 
 	// Task definitions and per-task execution, used by the comparison page.
 	Tasks(ctx context.Context) ([]store.TaskOption, error)
 	Task(ctx context.Context, id string) (store.TaskInfo, error)
 	TaskTurns(ctx context.Context, taskID string, limit int) ([]store.Turn, error)
+}
+
+// UpstreamProbe is implemented by data sources that can report their own
+// reachability, which is what /health shows. Readers that cannot answer it are
+// reported as reachable with a turn count.
+type UpstreamProbe interface {
+	Probe(ctx context.Context) (store.UpstreamStatus, error)
 }
 
 // Server renders reason_turns as JSON and HTML.
@@ -270,16 +280,38 @@ func (s *Server) handleFacetsJSON(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, facets)
 }
 
+// handleHealth reports the tool's own liveness plus the state of its data
+// source: /health is the path the deployment platform probes for every service,
+// so an unreachable autonomy must show up here (503) rather than as an empty
+// page nobody can tell apart from "no runs yet".
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	total, err := s.store.CountAll(r.Context())
+	ctx := r.Context()
+	var (
+		upstream store.UpstreamStatus
+		err      error
+	)
+	if probe, ok := s.store.(UpstreamProbe); ok {
+		upstream, err = probe.Probe(ctx)
+	} else {
+		var total int
+		total, err = s.store.CountAll(ctx)
+		upstream = store.UpstreamStatus{
+			URL:       s.store.Path(),
+			Reachable: err == nil,
+			Turns:     total,
+		}
+		if err != nil {
+			upstream.Error = err.Error()
+		}
+	}
 	status, code := "ok", http.StatusOK
 	if err != nil {
 		status, code = "error: "+err.Error(), http.StatusServiceUnavailable
 	}
 	s.writeJSON(w, code, map[string]any{
-		"status": status,
-		"db":     s.store.Path(),
-		"turns":  total,
+		"status":   status,
+		"upstream": upstream,
+		"turns":    upstream.Turns,
 	})
 }
 
@@ -302,9 +334,35 @@ func (s *Server) writeJSON(w http.ResponseWriter, code int, payload any) {
 	}
 }
 
+// fail reports a JSON error. An unavailable data source maps to 503 so a
+// caller can tell "the upstream is down" from "this request was bad".
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	log.Printf("httpapi: %v", err)
-	s.writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	code := http.StatusInternalServerError
+	if errors.Is(err, store.ErrUnavailable) {
+		code = http.StatusServiceUnavailable
+	}
+	s.writeJSON(w, code, map[string]string{"error": err.Error()})
+}
+
+// sourceError renders the HTML outage page for the browsing views: when the
+// upstream cannot be read, the page says so instead of showing an empty table.
+func (s *Server) sourceError(w http.ResponseWriter, err error) {
+	log.Printf("httpapi: %v", err)
+	code := http.StatusInternalServerError
+	if errors.Is(err, store.ErrUnavailable) {
+		code = http.StatusServiceUnavailable
+	}
+	s.render(w, code, "error.gohtml", errorView{
+		Source: s.store.Path(),
+		Error:  err.Error(),
+	})
+}
+
+// errorView is the model for error.gohtml.
+type errorView struct {
+	Source string
+	Error  string
 }
 
 // applyPreview truncates the long text columns so list responses stay small;

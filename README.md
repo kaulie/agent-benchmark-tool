@@ -7,20 +7,20 @@
 
 ## 第一阶段（已完成）：reason_turns 列表服务
 
-一个独立的本地 HTTP 服务，只读地读取 agent runtime（autonomy）SQLite 库里的
-`reason_turns` 表，并按 `task_id / agent / mode / model / input / output` 呈现。
+一个独立的本地 HTTP 服务，通过 **autonomy 的数据 API**（见 [`docs/autonomy-api.md`](docs/autonomy-api.md)）
+只读地读取 agent runtime 的 `reason_turns` 日志，并按 `task_id / agent / mode / model / input / output` 呈现。
 
-- **只读**：以 `mode=ro` + `PRAGMA query_only` 打开数据库，绝不影响正在写入的 agent runtime，
-  也不会修改被评测的数据。
-- **零外部依赖服务**：Go 标准库 `net/http` + `html/template`，SQLite 用纯 Go 驱动
-  `modernc.org/sqlite`（无 CGO，单二进制）。
+- **只读**：对上游只发 `GET`，不写任何数据，也不接触任何数据库文件——库放在哪、schema 长什么样由 autonomy 负责。
+- **不缓存**：页面上的每个数字都是当次从上游取回的；上游改了数据刷新页面就一致，不存在「读着旧库不报错」的沉默偏差。
+- **上游挂了就说**：autonomy 不可达时 `/health` 返回 **503** 并说明原因，页面显示「读不到上游数据」而不是一张空表。
+- **零外部依赖服务**：Go 标准库 `net/http` + `html/template`，`go.mod` 没有第三方依赖，单二进制、无 CGO。
 
 ### 运行
 
 ```bash
 go run ./cmd/benchmarkd
 # 等价于：
-go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1:4231
+go run ./cmd/benchmarkd -autonomy-url http://127.0.0.1:4300 -addr 127.0.0.1:4231
 ```
 
 启动后：
@@ -39,7 +39,7 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 - 过滤选项（facets）：`/api/facets`
 - 可对比的 task 列表：`/api/tasks`
 - JSON 对比：`/api/compare?a={task_id}&b={task_id}`
-- 健康检查：`/healthz`
+- 健康检查：`/health`（平台探活路径，同时带上游探活结果）/ `/healthz`（别名）
 
 ### task 对比（compare two tasks）
 
@@ -59,9 +59,9 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
      （`mode` / `model` / `status` / `tokens` / `duration`，差 1.5 倍以上才标记），少 turn 的一侧显示「该侧没有这一步」而不是错位
 - 正文默认：三个关键内容展开、每步正文折叠；工具条的「全部展开 / 全部折叠」用 `?open=all|none` 表达（可分享、刷新保持）
 - output 视图：整个页面共用一个 `raw_output` ⇄ `normalized_output` 开关（`?out=normalized`），切换即时生效、URL 同步
-- 数据来源：execution 来自 `reason_turns`（按 `task_id` 取全量，顺序 `created_at ASC, id ASC`，单侧上限 1000 turn）；
-  task 原始内容来自 `tasks` 表。**库里没有 `tasks` 表时不会报错**：该栏提示「原始内容见 planner 入口 prompt」，
-  其余照常对比
+- 数据来源：execution 来自上游的 `GET /api/tasks/{taskID}/turns`（顺序 `created_at ASC, id ASC`，单侧上限 1000 turn）；
+  task 原始内容来自 `GET /api/tasks/{taskID}`。**上游没有该 task 的定义时不会报错**：该栏提示
+  「原始内容见 planner 入口 prompt」，其余照常对比
 - 未选/选错都能用：只选一侧、选到不存在的 task（页面内联提示）、两侧选同一个 task（顶部黄条提醒）都不会 500
 
 `GET /api/compare?a=…&b=…` 返回同一份数据（`a` / `b` 各含 `task` / `planner_turn` / `result_turn` / `turns` /
@@ -72,11 +72,11 @@ go run ./cmd/benchmarkd -db ~/Projects/autonomy/data/autonomy.db -addr 127.0.0.1
 
 | 环境变量 | 含义 | 默认 |
 |----------|------|------|
-| `AUTONOMY_DB` | 要读取的 SQLite 库路径 | `~/Projects/autonomy/data/autonomy.db` |
+| `AUTONOMY_API_URL` | autonomy 数据 API 地址（`reason_turns` 的来源） | `http://127.0.0.1:4300` |
 | `SERVICE_PORT` | 启动端口：只给端口号（`8080`，仍是 127.0.0.1）或给完整 `host:port` | `4231` |
 | `BENCHMARK_ADDR` | 监听地址（完整地址，优先级高于 `SERVICE_PORT`） | `127.0.0.1:4231` |
 
-优先级：`-db` / `-addr` 命令行 > `BENCHMARK_ADDR` > `SERVICE_PORT` > 默认 `127.0.0.1:4231`。
+优先级：`-autonomy-url` > `AUTONOMY_API_URL` > `http://127.0.0.1:4300`；`-addr` / `BENCHMARK_ADDR` / `SERVICE_PORT` > 默认 `127.0.0.1:4231`。
 `SERVICE_PORT` 读不到（未设置/空/不是合法端口，如 `abc`、`0`、`70000`）时**不报错**，退回默认端口，
 只在日志里提示一行 `ignoring SERVICE_PORT=...`。服务**不读取**环境里的 `HOST` / `PORT`（那是别的服务用的）。
 
@@ -111,7 +111,7 @@ SERVICE_PORT=8080 bash scripts/start.sh          # 部署脚本同理：SERVICE_
 该 task 的全部 turn 与汇总（turn 数 / tokens / 耗时 / 成本 / agent），以及按执行位置对齐的 `aligned` 行。
 
 `GET /api/tasks` 返回可对比的 task 候选：`tasks` 表行 ∪ 日志里出现过的 `task_id`，各带 turn 数与最近活动时间，
-并用 `tasks_table` 说明该库是否有 `tasks` 表。
+并用 `tasks_table` 说明上游是否有 `tasks` 表。
 
 返回：
 
@@ -143,21 +143,22 @@ SERVICE_PORT=8080 bash scripts/start.sh          # 部署脚本同理：SERVICE_
 }
 ```
 
-`agent` 来自 `agents.name`（`reason_turns.agent_id` 左连接 `agents.id`），`output` 取
-`raw_output`（模型原样输出），`normalized_output` 只在详情接口返回。
+`agent`、`output`（= 上游的 `raw_output`）等字段名与语义由上游契约保证（见
+[`docs/autonomy-api.md`](docs/autonomy-api.md) §4.0）；`normalized_output` 只在详情接口返回。
 其余字段（provider / status / tokens / 耗时 / 成本）先一并带出，供第二、三阶段做
-行为标记与 model 对比分析，无需再改 schema。
+行为标记与 model 对比分析，无需再改上游 schema。
 
-兼容旧库：若 `reason_turns` 只有旧的 `output` 列（无 `raw_output`），或没有 `agents` / `tasks` 表、
-`agent_id` 为 TEXT，服务会自动降级读取而不会报错（没有 `tasks` 表时对比页只是不显示 task 定义）。
+兼容旧数据由**上游**负责（旧库的 `output` 列、`step` 列名、TEXT 的 `agent_id`、没有 `agents`/`tasks` 表
+都在 autonomy 侧归一）：本服务只认契约里的字段名，`agent_id` 解不出来就按 0 处理，
+没有 task 定义时对比页只是不显示那一栏。
 
-`step` 同理：autonomy 已原地把 `reason_turns.step` 改名为 `cycle`，两者存的是同一个数，
-服务优先读 `cycle`、其次回退 `step`（都没有则读作 0）；对外字段名仍叫 `step`，UI / JSON / 模板不变。
+`step` 对外字段名不变：契约里叫 `cycle`（autonomy 已原地把 `reason_turns.step` 改名），
+本服务收到后映射成 `step`，UI / JSON / 模板都不用动。
 
 ### 开发
 
 ```bash
-go test ./...     # 单元测试（临时库构造 + httptest，不触碰真实数据）
+go test ./...     # 单元测试（fake autonomy 上游 + httptest，不触碰真实数据）
 go vet ./...
 ```
 
@@ -167,11 +168,11 @@ go vet ./...
 |--------|------|
 | 启动 / 配置 / 优雅退出 | `cmd/benchmarkd/main.go` |
 | 领域模型、分页/过滤选项 | `internal/store/model.go` |
-| 只读 SQLite 访问、方言与列探测 | `internal/store/sqlite.go` |
+| autonomy 数据 API 客户端（唯一的取数路径） | `internal/autonomyapi/client.go` |
+| 上游契约的测试替身（假 autonomy） | `internal/fakeautonomy/fakeautonomy.go` |
 | HTTP 路由、JSON 接口、HTML 页面 | `internal/httpapi/server.go`、`internal/httpapi/pages.go` |
 | task 对比（取数、对齐、JSON） | `internal/httpapi/compare.go` |
-| 页面模板 | `internal/httpapi/templates/*.gohtml`（`compare.gohtml` = 对比页） |
-| 页面模板 | `internal/httpapi/templates/*.gohtml` |
+| 页面模板 | `internal/httpapi/templates/*.gohtml`（`compare.gohtml` = 对比页，`error.gohtml` = 上游不可用） |
 
 ## 部署（agent-control-plane-deployment 规范）
 
@@ -193,7 +194,7 @@ make runtime-check  # 在临时 runtime 目录跑一遍 start → /health → st
 |------|------|------|
 | `bin/benchmarkd` | 发版包 | 可执行文件 |
 | `scripts/{start,stop,restart}.sh` | 发版包 | 平台按服务契约调用 |
-| `backend/.env` | 首次启动生成（600） | 唯一可覆盖项：`AUTONOMY_DB`（被评测数据源） |
+| `backend/.env` | 首次启动生成（600） | 唯一可覆盖项：`AUTONOMY_API_URL`（被评测数据源） |
 | `backend/runtime.pid`、`backend/server.log` | 运行期 | 部署时被平台保留 |
 
 启动时平台注入 `PORT`（来自服务契约 healthUrl）、`RUNTIME_DIR`、`APP_VERSION`；

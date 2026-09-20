@@ -15,8 +15,9 @@
 #   backend/runtime.pid     进程号
 #   backend/server.log      标准输出/错误
 #
-# 本服务**只读**读取 agent runtime 的 reason_turns 库，自身不写任何数据；
-# 因此 backend/data 里没有库文件，数据源路径由 backend/.env 的 AUTONOMY_DB 指定。
+# 本服务**只读**读取 agent runtime 的 reason_turns 日志，自身不写任何数据；数据来源是
+# autonomy 的数据 API（HTTP），不再打开任何 SQLite 文件：库放在哪、schema 长什么样
+# 由 autonomy 负责，本服务只认地址（backend/.env 的 AUTONOMY_API_URL）。
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,15 +41,15 @@ die() { echo "[start][错误] $*" >&2; exit 1; }
 
 mkdir -p "${BACKEND}"
 
-# 首次启动生成 backend/.env：只放可覆盖项（数据源路径），权限 600，绝不入 git。
+# 首次启动生成 backend/.env：只放可覆盖项（数据源地址），权限 600，绝不入 git。
 # 监听端口/地址由本脚本按平台注入的 PORT 推导，避免契约换端口后 .env 里的
 # 旧值把服务卡在旧端口上。
 if [ ! -f "${ENV_FILE}" ]; then
   umask 077
   cat > "${ENV_FILE}" <<EOF
 # agent-benchmark-tool 运行期配置（首次启动自动生成，权限 600，请勿提交到 git）
-# 被评测的数据源：agent runtime（autonomy）的 SQLite 库，只读打开。
-AUTONOMY_DB=${HOME}/Projects/autonomy/data/autonomy.db
+# 被评测的数据源：agent runtime（autonomy）的数据 API 地址。
+AUTONOMY_API_URL=http://127.0.0.1:4300
 EOF
   chmod 600 "${ENV_FILE}"
   log "已生成 ${ENV_FILE}"
@@ -57,8 +58,11 @@ fi
 # shellcheck disable=SC1090
 set -a; . "${ENV_FILE}"; set +a
 
-AUTONOMY_DB="${AUTONOMY_DB:-${HOME}/Projects/autonomy/data/autonomy.db}"
-[ -f "${AUTONOMY_DB}" ] || die "数据源不存在: ${AUTONOMY_DB}（改 ${ENV_FILE} 里的 AUTONOMY_DB）"
+AUTONOMY_API_URL="${AUTONOMY_API_URL:-http://127.0.0.1:4300}"
+# 旧配置（读库文件）已废弃：留着只会让人以为数据源还是那个文件。
+if [ -n "${AUTONOMY_DB:-}" ]; then
+  log "提示：${ENV_FILE} 里的 AUTONOMY_DB 已不再使用（本服务改为读 ${AUTONOMY_API_URL} 的数据 API）"
+fi
 
 # 平台注入的值优先：端口永远跟随服务契约的 healthUrl。
 ADDR="127.0.0.1:${PORT}"
@@ -85,12 +89,20 @@ if command -v lsof >/dev/null 2>&1; then
   fi
 fi
 
-log "启动 部署版本=${APP_VERSION} 监听=${ADDR} 数据源=${AUTONOMY_DB}(只读)"
-nohup "${BIN}" -db "${AUTONOMY_DB}" -addr "${ADDR}" >> "${LOG_FILE}" 2>&1 &
+# 上游可达性只是提示，不在启动时硬失败：autonomy 可能在重启（或还没起），
+# 这时服务照常启动，/health 会如实报 503 并给出原因，页面也会说明读不到上游。
+if ! curl -fsS -m 3 "${AUTONOMY_API_URL}/health" >/dev/null 2>&1; then
+  log "警告：上游 ${AUTONOMY_API_URL} 现在探不通（服务仍会启动，/health 会报 503）"
+fi
+
+log "启动 部署版本=${APP_VERSION} 监听=${ADDR} 数据源=${AUTONOMY_API_URL}(数据 API)"
+nohup "${BIN}" -autonomy-url "${AUTONOMY_API_URL}" -addr "${ADDR}" >> "${LOG_FILE}" 2>&1 &
 echo $! > "${PID_FILE}"
 pid="$(cat "${PID_FILE}")"
 
-# 探活：/health 是平台对每个服务统一探的路径。
+# 探活：/health 是平台对每个服务统一探的路径。只要它**答话**就算起来了——
+# 上游不可达时 /health 会答 503，那是数据源的问题，不是本服务没起来
+# （平台自己的 healthUrl 探测会照旧把这次部署判为不健康，这才是对的）。
 for _ in $(seq 1 40); do
   if ! kill -0 "${pid}" 2>/dev/null; then
     rm -f "${PID_FILE}"
@@ -98,9 +110,13 @@ for _ in $(seq 1 40); do
     tail -20 "${LOG_FILE}" >&2 || true
     exit 1
   fi
-  if curl -fsS -m 2 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-    log "启动成功 pid=${pid} log=${LOG_FILE}"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 2 "http://127.0.0.1:${PORT}/health" || true)"
+  if [ -n "${code}" ] && [ "${code}" != "000" ]; then
+    log "启动成功 pid=${pid} log=${LOG_FILE} /health=${code}"
     log "列表页：http://127.0.0.1:${PORT}/"
+    if [ "${code}" != "200" ]; then
+      log "提示：/health=${code} 说明现在读不到上游（autonomy 数据 API），恢复后页面会自动正常"
+    fi
     exit 0
   fi
   sleep 0.5

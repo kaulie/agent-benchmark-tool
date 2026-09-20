@@ -1,8 +1,13 @@
-// Package store exposes a read-only view over the agent runtime's reason_turns
-// log (the autonomy SQLite schema) for benchmarking and behaviour analysis.
+// Package store is the read-only view model of the agent runtime's reason_turns
+// log, as the benchmark tool renders it for benchmarking and behaviour analysis.
+//
+// The data itself comes from the autonomy data API (see docs/autonomy-api.md and
+// internal/autonomyapi): this package holds the shapes the UI speaks, not a
+// database handle, so the log's storage and schema stay autonomy's business.
 package store
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -14,8 +19,11 @@ import (
 // because the later phases (behaviour tagging, prompt iteration, model
 // comparison) need provider/model/usage/timing without a schema change.
 type Turn struct {
-	ID       int64  `json:"id"`
-	TaskID   string `json:"task_id"`
+	ID     int64  `json:"id"`
+	TaskID string `json:"task_id"`
+	// Step is the decision cycle (reason_turns.cycle upstream). It keeps the
+	// name "step" because that is what the UI and the JSON API have always
+	// called it; autonomy renamed the column, not the meaning.
 	Step     int64  `json:"step"`
 	Mode     string `json:"mode"`
 	AgentID  int64  `json:"agent_id"`
@@ -79,12 +87,13 @@ const (
 	MaxLimit = 500
 )
 
-// Orderable columns, whitelisted so the sort key can never reach SQL raw.
+// Orderable columns, whitelisted so the sort key never reaches the upstream
+// query as free text and so an invalid order falls back to the default.
 var orderColumns = map[string]string{
-	"id":           "r.id",
-	"created_at":   "r.created_at",
-	"duration_ms":  "r.duration_ms",
-	"total_tokens": "r.total_tokens",
+	"id":           "id",
+	"created_at":   "created_at",
+	"duration_ms":  "duration_ms",
+	"total_tokens": "total_tokens",
 }
 
 // Normalize clamps the options into a valid, safe query shape.
@@ -130,21 +139,25 @@ type FacetValue struct {
 	Count int    `json:"count"`
 }
 
-// TaskInfo is a task's own definition: the "original content" a run started
-// from. It is read from the optional tasks table; databases that only carry the
-// reason_turns log simply have no TaskInfo (see SQLite.HasTasks).
+// TaskInfo is a task's own definition: the "original content" the run started
+// from, as autonomy reports it (GET /api/tasks/{taskID}). Tasks that only ever
+// appear in the log have no definition; the comparison page then reads the task
+// from the planner entry prompt instead (ErrTaskNotFound).
 type TaskInfo struct {
-	ID            string `json:"id"`
-	Description   string `json:"description"`
-	Domain        string `json:"domain"`
-	Context       string `json:"context"`
-	Target        string `json:"target"`
-	Goal          string `json:"goal"`
-	ExpectedState string `json:"expected_state"`
-	Status        string `json:"status"`
-	AgentID       int64  `json:"agent_id"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	ID          string `json:"id"`
+	Description string `json:"description"`
+	Domain      string `json:"domain"`
+	GoalType    string `json:"goal_type"`
+	// ContextRef is the task this one was derived from, e.g. "task-446e…";
+	// empty when the upstream has none.
+	ContextRef string `json:"context_ref"`
+	Status     string `json:"status"`
+	// Error is the task-level failure (why a run is blocked/exited), empty for
+	// healthy tasks.
+	Error     string `json:"error"`
+	AgentID   int64  `json:"agent_id"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // TaskOption is one selectable task in the comparison picker: the tasks table
@@ -169,6 +182,23 @@ var ErrNotFound = fmt.Errorf("turn not found")
 // ErrTaskNotFound is returned when neither the tasks table nor the log knows
 // the requested task id.
 var ErrTaskNotFound = fmt.Errorf("task not found")
+
+// ErrUnavailable reports that the data source (the autonomy service) could not
+// be reached, answered with an error, or answered with something unreadable.
+// Handlers map it to 503 so an upstream outage never looks like a bench
+// full of broken runs.
+var ErrUnavailable = errors.New("data source unavailable")
+
+// UpstreamStatus is what the tool knows about its data source, reported by
+// /health. Reachable=false carries the reason in Error; Version/Turns come from
+// the upstream's self-description when it answered.
+type UpstreamStatus struct {
+	URL       string `json:"url"`
+	Reachable bool   `json:"reachable"`
+	Version   string `json:"version,omitempty"`
+	Turns     int    `json:"turns,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
 
 // Preview shortens s to at most n runes for list rendering.
 func Preview(s string, n int) string {

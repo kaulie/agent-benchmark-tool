@@ -1,0 +1,34 @@
+{{define "error.gohtml"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>upstream unavailable · agent benchmark</title>
+<style>
+  :root { --line:#e2e5ea; --muted:#6b7280; --head:#f6f7f9; --accent:#1f6feb; --warn:#92400e; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 24px 60px; font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+         color:#111; background:#fff; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:14px; word-break:break-all; }
+  .card { border:1px solid var(--line); border-radius:8px; background:var(--head); padding:12px 14px; }
+  .banner { background:#fef3c7; color:var(--warn); border-radius:6px; padding:6px 10px; display:inline-block;
+            font-size:12px; margin-bottom:10px; }
+  pre { margin:10px 0 0; padding:10px 12px; background:#fff; border:1px solid var(--line); border-radius:6px;
+        font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px;
+        white-space:pre-wrap; word-break:break-word; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<h1>读不到上游数据 · upstream unavailable</h1>
+<div class="sub">upstream: {{.Source}}</div>
+<div class="card">
+  <span class="banner">benchmark 只通过 autonomy 的数据 API 取数，现在这次请求失败了</span>
+  <p>页面上的数字都来自上游的实时响应，本工具不缓存、也不落库；上游恢复后刷新本页即可。</p>
+  <pre>{{.Error}}</pre>
+</div>
+<p><a href="/">« 返回列表重试</a> · <a href="/health">/health</a>（同一条原因也在这里，返回 503）</p>
+</body>
+</html>
+{{end}}
