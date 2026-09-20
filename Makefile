@@ -39,7 +39,7 @@ fmt-check:
 vet:
 	go vet ./...
 
-run: ## 本机运行（默认读 ~/Projects/autonomy/data/autonomy.db，监听 127.0.0.1:4231）
+run: ## 本机运行（默认读 http://127.0.0.1:4300 的 autonomy 数据 API，监听 127.0.0.1:4231）
 	go run $(PKG)
 
 package: ## 按平台规范打包到 outputs/（等价于控制面流水线的构建步骤）

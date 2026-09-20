@@ -1,139 +1,108 @@
 package httpapi
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	_ "modernc.org/sqlite"
-
+	"github.com/kaulie/agent-benchmark-tool/internal/autonomyapi"
+	"github.com/kaulie/agent-benchmark-tool/internal/fakeautonomy"
 	"github.com/kaulie/agent-benchmark-tool/internal/store"
 )
 
-// fixtureSchemaLog is the subset of the autonomy schema the tool reads.
-const fixtureSchemaLog = `
-CREATE TABLE agents (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL DEFAULT '',
-  llm_provider TEXT NOT NULL DEFAULT '',
-  model TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE reason_turns (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id TEXT NOT NULL DEFAULT '',
-  agent_id INTEGER NOT NULL DEFAULT 0,
-  cycle INTEGER NOT NULL DEFAULT 0,
-  mode TEXT NOT NULL DEFAULT '',
-  llm_provider TEXT NOT NULL DEFAULT '',
-  model TEXT NOT NULL DEFAULT '',
-  llm_agent_id TEXT NOT NULL DEFAULT '',
-  input TEXT NOT NULL DEFAULT '',
-  raw_output TEXT NOT NULL DEFAULT '',
-  normalized_output TEXT NOT NULL DEFAULT '',
-  run_id TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT '',
-  error_code TEXT NOT NULL DEFAULT '',
-  error_message TEXT NOT NULL DEFAULT '',
-  duration_ms INTEGER NOT NULL DEFAULT 0,
-  event_count INTEGER NOT NULL DEFAULT 0,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-  total_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_cents REAL,
-  started_at TEXT,
-  ended_at TEXT,
-  created_at TEXT NOT NULL
-);`
-
-// fixtureTasksSchema is the optional tasks table (task definitions).
-const fixtureTasksSchema = `
-CREATE TABLE tasks (
-  id TEXT PRIMARY KEY,
-  description TEXT NOT NULL DEFAULT '',
-  domain TEXT NOT NULL DEFAULT '',
-  context TEXT NOT NULL DEFAULT '',
-  target TEXT NOT NULL DEFAULT '',
-  goal TEXT NOT NULL DEFAULT '',
-  expected_state TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT '',
-  agent_id INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);`
-
-const fixtureSchema = fixtureSchemaLog + fixtureTasksSchema
-
-// fixtureSeeds include an HTML-ish prompt to prove the page escapes it.
-var fixtureSeeds = []string{
-	`INSERT INTO agents (id, name, llm_provider, model) VALUES
-	   (1, 'agent-0001', 'cursor', 'composer-2.5'),
-	   (2, 'agent-0002', 'cline', 'deepseek-v4-pro')`,
-	`INSERT INTO reason_turns (task_id, agent_id, cycle, mode, llm_provider, model, input, raw_output,
-	   normalized_output, run_id, status, duration_ms, total_tokens, cost_cents, created_at) VALUES
-	   ('task-1', 1, 1, 'plan', 'cursor', 'composer-2.5', '<script>alert(1)</script> PLAN PROMPT',
-	    'raw plan output', '{"type":"plan"}', 'run-a', 'finished', 1200, 4200, 1.25, '2026-09-14T10:00:00Z'),
-	   ('task-1', 1, 0, 'agent', 'cursor', 'composer-2.5', 'AGENT PROMPT ONE', 'did the thing',
-	    '', 'run-b', 'finished', 800, 900, NULL, '2026-09-14T10:05:00Z'),
-	   ('task-2', 2, 1, 'plan', 'cline', 'deepseek-v4-pro', 'PLAN PROMPT TWO', 'plan two',
-	    'plan two', 'run-c', 'error', 300, 100, NULL, '2026-09-14T11:00:00Z')`,
+// fixtureTurns is the standard three-turn log the page tests render. The first
+// prompt is HTML-ish to prove the pages escape what the upstream sends.
+func fixtureTurns() []fakeautonomy.Turn {
+	cost := 1.25
+	return []fakeautonomy.Turn{
+		{
+			ID: 1, TaskID: "task-1", Cycle: 1, Mode: "plan", AgentID: 1, Agent: "agent-0001",
+			Provider: "cursor", Model: "composer-2.5",
+			Input: "<script>alert(1)</script> PLAN PROMPT", Output: "raw plan output",
+			NormalizedOutput: `{"type":"plan"}`, RunID: "run-a", Status: "finished",
+			DurationMS: 1200, TotalTokens: 4200, CostCents: &cost,
+			StartedAt: "2026-09-14T10:00:00Z", EndedAt: "2026-09-14T10:00:02Z",
+			CreatedAt: "2026-09-14T10:00:00Z",
+		},
+		{
+			ID: 2, TaskID: "task-1", Mode: "agent", AgentID: 1, Agent: "agent-0001",
+			Provider: "cursor", Model: "composer-2.5",
+			Input: "AGENT PROMPT ONE", Output: "did the thing",
+			RunID: "run-b", Status: "finished", DurationMS: 800, TotalTokens: 900,
+			CreatedAt: "2026-09-14T10:05:00Z",
+		},
+		{
+			ID: 3, TaskID: "task-2", Cycle: 1, Mode: "plan", AgentID: 2, Agent: "agent-0002",
+			Provider: "cline", Model: "deepseek-v4-pro",
+			Input: "PLAN PROMPT TWO", Output: "plan two", NormalizedOutput: "plan two",
+			RunID: "run-c", Status: "error", DurationMS: 300, TotalTokens: 100,
+			CreatedAt: "2026-09-14T11:00:00Z",
+		},
+	}
 }
 
-// fixtureTaskSeeds are the task definitions: the "original content" the
-// comparison page shows next to each run.
-var fixtureTaskSeeds = []string{
-	`INSERT INTO tasks (id, description, domain, status, agent_id, created_at, updated_at) VALUES
-	   ('task-1', 'normalize deployment events', 'software_development', 'completed', 1,
-	    '2026-09-14T09:59:00Z', '2026-09-14T10:06:00Z'),
-	   ('task-2', 'ship the pipeline change', '', 'error', 2,
-	    '2026-09-14T10:59:00Z', '2026-09-14T11:01:00Z')`,
+// fixtureTasks are the task definitions: the "original content" the comparison
+// page shows next to each run.
+func fixtureTasks() []fakeautonomy.Task {
+	return []fakeautonomy.Task{
+		{
+			ID: "task-1", Description: "normalize deployment events", Domain: "software_development",
+			GoalType: "dev_feature", ContextRef: map[string]string{"task": "task-9"},
+			Status: "completed", AgentID: 1,
+			CreatedAt: "2026-09-14T09:59:00Z", UpdatedAt: "2026-09-14T10:06:00Z",
+		},
+		{
+			ID: "task-2", Description: "ship the pipeline change", Status: "error", AgentID: 2,
+			CreatedAt: "2026-09-14T10:59:00Z", UpdatedAt: "2026-09-14T11:01:00Z",
+		},
+	}
 }
 
+// newTestServer points the tool at a fake autonomy upstream carrying the
+// standard fixture, the same way production points it at the real service.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	seeds := append(append([]string{}, fixtureSeeds...), fixtureTaskSeeds...)
-	return newTestServerWith(t, fixtureSchema, seeds)
+	srv, _ := newTestServerWith(t, nil)
+	return srv
 }
 
-// newTestServerWith builds a server over a fixture database of the given shape,
-// so tests can also cover log-only databases (no tasks table).
-func newTestServerWith(t *testing.T, schema string, seeds []string) *Server {
+// newTestServerWith lets a test shape the upstream (a log-only database, an
+// outage, an extra turn) before the tool is wired to it.
+func newTestServerWith(t *testing.T, tweak func(*fakeautonomy.Server)) (*Server, *fakeautonomy.Server) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "autonomy.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatalf("open fixture: %v", err)
-	}
-	if _, err := db.Exec(schema); err != nil {
-		t.Fatalf("schema: %v", err)
-	}
-	for _, seed := range seeds {
-		if _, err := db.Exec(seed); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close fixture: %v", err)
+	fake := fakeautonomy.New()
+	fake.SetTurns(fixtureTurns()...)
+	fake.SetTasks(true, fixtureTasks()...)
+	if tweak != nil {
+		tweak(fake)
 	}
 
-	st, err := store.OpenReadOnly(path)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(fake.Handler())
+	t.Cleanup(ts.Close)
 
-	srv, err := New(st)
+	source, err := autonomyapi.New(ts.URL)
+	if err != nil {
+		t.Fatalf("autonomy client: %v", err)
+	}
+	srv, err := New(source)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
+	return srv, fake
+}
+
+// newServerOnly is the common case: just the server.
+func newServerOnly(t *testing.T, tweak func(*fakeautonomy.Server)) *Server {
+	t.Helper()
+	srv, _ := newTestServerWith(t, tweak)
 	return srv
 }
+
+// The real data source is the autonomy HTTP client: it has to satisfy the
+// interface the pages are written against.
+var _ TurnReader = (*autonomyapi.Client)(nil)
 
 func get(t *testing.T, srv *Server, target string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -280,15 +249,79 @@ func TestFacetsAndHealthJSON(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("health status=%d", rec.Code)
 	}
-	var health map[string]any
+	var health struct {
+		Status   string               `json:"status"`
+		Turns    int                  `json:"turns"`
+		Upstream store.UpstreamStatus `json:"upstream"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
 		t.Fatalf("decode health: %v", err)
 	}
-	if health["status"] != "ok" || health["turns"] != float64(3) {
+	if health.Status != "ok" || health.Turns != 3 {
 		t.Fatalf("health=%+v", health)
 	}
-	if db, _ := health["db"].(string); !strings.HasSuffix(db, "autonomy.db") {
-		t.Fatalf("health db=%q", health["db"])
+	// The data source is the autonomy API, not a database file: /health names it.
+	if !health.Upstream.Reachable || !strings.HasPrefix(health.Upstream.URL, "http://127.0.0.1:") ||
+		health.Upstream.Version != "fake-0001" || health.Upstream.Turns != 3 {
+		t.Fatalf("health upstream=%+v", health.Upstream)
+	}
+}
+
+// TestUpstreamOutage: when autonomy cannot be read, the tool says so — 503 with
+// the reason on /health and on every JSON endpoint, and an explicit page instead
+// of an empty table that looks like "no runs yet".
+func TestUpstreamOutage(t *testing.T) {
+	srv := newServerOnly(t, func(f *fakeautonomy.Server) {
+		f.Break("database is locked by the runtime")
+	})
+
+	rec := get(t, srv, "/health")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status=%d, want 503", rec.Code)
+	}
+	var health struct {
+		Status   string               `json:"status"`
+		Upstream store.UpstreamStatus `json:"upstream"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if !strings.HasPrefix(health.Status, "error: ") || health.Upstream.Reachable ||
+		!strings.Contains(health.Upstream.Error, "database is locked") {
+		t.Fatalf("health=%+v upstream=%+v", health.Status, health.Upstream)
+	}
+
+	rec = get(t, srv, "/api/reason-turns")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("list json status=%d, want 503", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "data source unavailable") {
+		t.Fatalf("list json body=%s", rec.Body.String())
+	}
+
+	rec = get(t, srv, "/")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("list page status=%d, want 503", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "读不到上游数据") || !strings.Contains(body, "database is locked") {
+		t.Fatalf("list page should explain the outage:\n%s", firstLines(body, 30))
+	}
+	if strings.Contains(body, "no turns match these filters") {
+		t.Fatal("the outage page must not render the empty-table state")
+	}
+
+	rec = get(t, srv, "/turns/1")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "读不到上游数据") {
+		t.Fatalf("detail page status=%d", rec.Code)
+	}
+
+	rec = get(t, srv, "/compare?a=task-1&b=task-2")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "读不到上游数据") {
+		t.Fatalf("compare page status=%d", rec.Code)
+	}
+	if rec := get(t, srv, "/api/compare?a=task-1"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("compare json status=%d, want 503", rec.Code)
 	}
 }
 
@@ -695,9 +728,9 @@ func TestTasksJSON(t *testing.T) {
 	}
 }
 
-// A log-only database still compares: only the task definition is missing.
+// A log-only upstream still compares: only the task definition is missing.
 func TestCompareWithoutTasksTable(t *testing.T) {
-	srv := newTestServerWith(t, fixtureSchemaLog, fixtureSeeds)
+	srv := newServerOnly(t, func(f *fakeautonomy.Server) { f.SetTasks(false) })
 
 	rec := get(t, srv, "/api/tasks")
 	var tasks struct {
@@ -712,7 +745,7 @@ func TestCompareWithoutTasksTable(t *testing.T) {
 	}
 
 	body := get(t, srv, "/compare?a=task-1&b=task-2").Body.String()
-	if !strings.Contains(body, "该库没有这个 task 的定义") {
+	if !strings.Contains(body, "上游没有这个 task 的定义") {
 		t.Fatal("expected the page to explain the missing task definition")
 	}
 	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt; PLAN PROMPT") {

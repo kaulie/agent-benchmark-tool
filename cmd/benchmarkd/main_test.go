@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/kaulie/agent-benchmark-tool/internal/autonomyapi"
+)
 
 // env builds a getenv func from a map: the empty string means "unset".
 func env(vars map[string]string) func(string) string {
@@ -46,5 +50,40 @@ func TestDefaultAddrReadsProcessEnv(t *testing.T) {
 	t.Setenv("SERVICE_PORT", "")
 	if got := defaultAddr(); got != defaultListenAddr {
 		t.Fatalf("defaultAddr=%q, want the default %q", got, defaultListenAddr)
+	}
+}
+
+func TestResolveBaseURL(t *testing.T) {
+	tests := []struct {
+		name string
+		vars map[string]string
+		want string
+	}{
+		{"nothing set", nil, autonomyapi.DefaultBaseURL},
+		{"empty value", map[string]string{"AUTONOMY_API_URL": ""}, autonomyapi.DefaultBaseURL},
+		{"blank value", map[string]string{"AUTONOMY_API_URL": "   "}, autonomyapi.DefaultBaseURL},
+		{"configured", map[string]string{"AUTONOMY_API_URL": "http://127.0.0.1:4399"}, "http://127.0.0.1:4399"},
+		{"padded", map[string]string{"AUTONOMY_API_URL": " http://autonomy.internal "}, "http://autonomy.internal"},
+		// The old configuration knob must not silently decide the data source.
+		{"AUTONOMY_DB is ignored", map[string]string{"AUTONOMY_DB": "/tmp/autonomy.db"}, autonomyapi.DefaultBaseURL},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveBaseURL(env(tc.vars)); got != tc.want {
+				t.Fatalf("resolveBaseURL=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The real process environment has to reach resolveBaseURL, not just the unit test.
+func TestDefaultBaseURLReadsProcessEnv(t *testing.T) {
+	t.Setenv("AUTONOMY_API_URL", "http://127.0.0.1:4401")
+	if got := defaultBaseURL(); got != "http://127.0.0.1:4401" {
+		t.Fatalf("defaultBaseURL=%q", got)
+	}
+	t.Setenv("AUTONOMY_API_URL", "")
+	if got := defaultBaseURL(); got != autonomyapi.DefaultBaseURL {
+		t.Fatalf("defaultBaseURL=%q, want %q", got, autonomyapi.DefaultBaseURL)
 	}
 }

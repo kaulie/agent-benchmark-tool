@@ -1,10 +1,15 @@
-// Command benchmarkd serves the agent benchmark tool's read-only view over an
+// Command benchmarkd serves the agent benchmark tool's read-only view over the
 // autonomy reason_turns log.
+//
+// The log is read over autonomy's data API (docs/autonomy-api.md); the tool
+// never opens a database file, so the log's location and schema stay autonomy's
+// business and a moved/renamed store cannot leave this service showing stale
+// data.
 //
 // Local usage:
 //
 //	go run ./cmd/benchmarkd
-//	go run ./cmd/benchmarkd -db /path/to/autonomy.db -addr 127.0.0.1:4231
+//	go run ./cmd/benchmarkd -autonomy-url http://127.0.0.1:4300 -addr 127.0.0.1:4231
 //	SERVICE_PORT=8080 go run ./cmd/benchmarkd
 package main
 
@@ -18,26 +23,25 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/kaulie/agent-benchmark-tool/internal/autonomyapi"
 	"github.com/kaulie/agent-benchmark-tool/internal/httpapi"
-	"github.com/kaulie/agent-benchmark-tool/internal/store"
 )
 
-// defaultDBPath is the autonomy runtime database this tool reads by default.
-func defaultDBPath() string {
-	if v := os.Getenv("AUTONOMY_DB"); v != "" {
+// defaultBaseURL is the autonomy data API this tool reads by default.
+func defaultBaseURL() string { return resolveBaseURL(os.Getenv) }
+
+// resolveBaseURL picks the autonomy address from getenv: AUTONOMY_API_URL when
+// set, otherwise the service contract's port on loopback.
+func resolveBaseURL(getenv func(string) string) string {
+	if v := strings.TrimSpace(getenv("AUTONOMY_API_URL")); v != "" {
 		return v
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "data/autonomy.db"
-	}
-	return filepath.Join(home, "Projects", "autonomy", "data", "autonomy.db")
+	return autonomyapi.DefaultBaseURL
 }
 
 // defaultListenAddr is the built-in listen address (loopback only: the tool
@@ -83,7 +87,7 @@ func resolveAddr(getenv func(string) string) string {
 var version = "dev"
 
 func main() {
-	dbPath := flag.String("db", defaultDBPath(), "path to the autonomy SQLite database (read-only)")
+	baseURL := flag.String("autonomy-url", defaultBaseURL(), "autonomy data API base URL (the reason_turns source)")
 	addr := flag.String("addr", defaultAddr(), "listen address, e.g. 127.0.0.1:4231")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
@@ -96,29 +100,29 @@ func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("benchmarkd ")
 
-	if err := run(*dbPath, *addr); err != nil {
+	if err := run(*baseURL, *addr); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
 }
 
-func run(dbPath, addr string) error {
-	db, err := store.OpenReadOnly(dbPath)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	api, err := httpapi.New(db)
+func run(baseURL, addr string) error {
+	source, err := autonomyapi.New(baseURL)
 	if err != nil {
 		return err
 	}
 
+	api, err := httpapi.New(source)
+	if err != nil {
+		return err
+	}
+
+	// Probe the upstream once so the log states whether the data source answers.
+	// A failing probe is not fatal: the service still starts and serves /health
+	// (503, with the reason) and pages that explain the outage, so a restarting
+	// autonomy does not turn into a failed deployment of this tool.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	total, err := db.CountAll(ctx)
+	upstream, probeErr := source.Probe(ctx)
 	cancel()
-	if err != nil {
-		return err
-	}
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -131,8 +135,12 @@ func run(dbPath, addr string) error {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
 	log.Printf("benchmarkd %s", version)
-	log.Printf("db (read-only): %s", db.Path())
-	log.Printf("reason_turns: %d rows", total)
+	log.Printf("upstream: %s", upstream.URL)
+	if probeErr != nil {
+		log.Printf("upstream unreachable: %v (serving anyway; /health reports 503)", probeErr)
+	} else {
+		log.Printf("upstream ok: version=%s reason_turns=%d", upstream.Version, upstream.Turns)
+	}
 	log.Printf("listening on http://%s/  (json: /api/reason-turns, health: /health)", ln.Addr())
 
 	errc := make(chan error, 1)

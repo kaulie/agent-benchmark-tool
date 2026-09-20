@@ -76,7 +76,7 @@
 <body data-out-view-root data-out="{{.OutView}}">
 <p><a href="/">« reason_turns 列表</a> · <a href="/api/compare?a={{.LeftID}}&amp;b={{.RightID}}">json</a></p>
 <h1>task 对比 <span class="hint">compare two runs · 左 = A · 右 = B</span></h1>
-<div class="sub">db: {{.DBPath}}</div>
+<div class="sub">upstream: {{.Source}}</div>
 
 <form class="picker" method="get" action="/compare">
   <div class="field">
@@ -213,7 +213,7 @@
 {{define "sideTask"}}{{if .Empty}}<p class="hint">未选择 task。</p>
 {{else if .NotFound}}<p class="hint">找不到该 task。</p>
 {{else if .HasTask}}<dl class="meta">{{range .TaskFields}}<div><dt>{{.Label}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>
-{{else}}<p class="hint">该库没有这个 task 的定义（没有 tasks 表，或 tasks 表里没有这一行）：原始内容以下面 planner 入口 prompt 里携带的 task 定义为准。</p>{{end}}{{end}}
+{{else}}<p class="hint">上游没有这个 task 的定义（tasks 表里没有这一行）：原始内容以下面 planner 入口 prompt 里携带的 task 定义为准。</p>{{end}}{{end}}
 
 {{define "turnMeta"}}{{with .Turn}}
 <div class="thead">

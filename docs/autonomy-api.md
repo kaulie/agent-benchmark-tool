@@ -236,7 +236,12 @@ benchmark 用它做上游探活与健康展示，不需要改动。若方便，�
 - 大文本量：`input`/`raw_output` 可能几十 KB，列表接口务必支持 §4.1 的 `preview`/`truncate`，
   否则一次 50 条的列表页会传几 MB。
 
-## 6. benchmarkd 侧改造计划（等 autonomy 端点就绪后做）
+## 6. benchmarkd 侧改造（已实现）
+
+> 状态：已实现（本仓库 PR #9，`internal/autonomyapi`）。取数实现见 `internal/autonomyapi/client.go`（HTTP 客户端，实现
+> `httpapi.TurnReader`），删除了 `internal/store/sqlite.go` 与 `modernc.org/sqlite` 依赖；
+> `-db` / `AUTONOMY_DB` 已被 `-autonomy-url` / `AUTONOMY_API_URL` 取代，`/health` 的 `db`
+> 字段换成 `upstream`（地址 + 可达性 + 版本 + 条数，不可达时 503）。下面是当时的改造计划，留档。
 
 1. 新增 `internal/autonomyapi`：HTTP client，实现 `httpapi.TurnReader` 接口
    （`List / Get / Facets / CountAll / Tasks / Task / TaskTurns / Path`），内部把 §4 的 JSON 解成
