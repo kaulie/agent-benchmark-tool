@@ -315,6 +315,14 @@ func TestUpstreamOutage(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "读不到上游数据") {
 		t.Fatalf("detail page status=%d", rec.Code)
 	}
+
+	rec = get(t, srv, "/compare?a=task-1&b=task-2")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "读不到上游数据") {
+		t.Fatalf("compare page status=%d", rec.Code)
+	}
+	if rec := get(t, srv, "/api/compare?a=task-1"); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("compare json status=%d, want 503", rec.Code)
+	}
 }
 
 // TestListPageHTML pins the list page contract: metadata only. The prompt and
